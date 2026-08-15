@@ -1,0 +1,42 @@
+# Default application settings.
+# Environment variables prefixed with WI_ override these values.
+# Example: WI_CONFIDENCE_AUTO_ACCEPT=0.70
+
+confidence:
+  # Detections at or above this value are accepted automatically.
+  auto_accept: 0.60
+  # Detections below this value are discarded (not sent to review).
+  detect_min: 0.15
+
+detector:
+  batch_size: 8
+  imgsz: 640
+  # auto | cpu | cuda | cuda:0
+  device: auto
+  # Ultralytics internal cutoff. Keep this at or below detect_min.
+  # Application-level filtering uses confidence.auto_accept.
+  yolo_conf: 0.15
+
+classes:
+  0: tiger
+  1: prey
+  2: rival
+  3: human
+
+crops:
+  # Extra padding around the YOLO box, as a fraction of box size.
+  padding: 0.05
+  jpeg_quality: 95
+
+paths:
+  database: database/wildlife.db
+  crops: data/crops
+  logs: logs
+  reports: reports
+
+server:
+  host: 127.0.0.1
+  port: 8000
+  cors_origins:
+    - http://localhost:5173
+    - http://127.0.0.1:5173

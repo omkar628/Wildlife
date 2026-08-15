@@ -1,0 +1,26 @@
+# Wildlife Intelligence — Python backend
+# Python 3.10+ recommended (developed against 3.10).
+
+# API
+fastapi>=0.115.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+pydantic-settings>=2.1.0
+python-multipart>=0.0.6
+PyYAML>=6.0
+
+# Imaging / metadata
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Detector (YOLO11 via Ultralytics)
+# Requires torch. If torch is not already installed:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+ultralytics>=8.3.0
+
+# Future Re-ID gallery search (not used until inference code is provided)
+# faiss-cpu>=1.8.0
+
+# Tests
+pytest>=8.0.0
+httpx>=0.26.0

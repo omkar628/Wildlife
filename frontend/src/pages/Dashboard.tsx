@@ -23,7 +23,7 @@ export default function DashboardPage() {
           <h2>Dashboard</h2>
           <p>Local camera-trap detections. Auto-accept threshold {Math.round(data.confidence_auto_accept * 100)}%.</p>
         </div>
-        <a className="btn" href="#/import">Import folder</a>
+        <a className="btn" href="#/import">Camera Trap Import</a>
       </div>
 
       <div className="grid stats">

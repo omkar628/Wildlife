@@ -26,6 +26,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     deps.get_review_service.cache_clear()
     deps.get_graph_service.cache_clear()
     deps.get_reid_adapter.cache_clear()
+    deps.get_gnn_service.cache_clear()
+    deps.get_identity_service.cache_clear()
     settings = reload_settings()
     yield settings
     reload_settings()

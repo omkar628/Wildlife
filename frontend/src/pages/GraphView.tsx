@@ -1,27 +1,151 @@
-import { useEffect, useState } from 'react'
-import { api, type GraphPayload } from '../api'
+import { useEffect, useMemo, useState } from 'react'
+import { api, type GraphPayload, type GnnPrediction } from '../api'
+
+function percent(value: number | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—'
+  return `${Math.round(value * 100)}%`
+}
+
+function PredictionPanel({ prediction }: { prediction: GnnPrediction }) {
+  if (!prediction.available) {
+    return (
+      <p className="empty">
+        {prediction.detail || prediction.reason || 'Need 5 identified camera observations for GNN prediction.'}
+      </p>
+    )
+  }
+
+  return (
+    <div>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Predicted next camera{' '}
+        <strong style={{ color: 'var(--gold)' }}>{prediction.predicted_camera_id}</strong>
+        {' · '}
+        confidence {percent(prediction.confidence)}
+      </p>
+      {prediction.feature_degraded ? (
+        <p className="error" style={{ fontSize: 13 }}>
+          Feature-degraded: some environmental fields used documented defaults. Ranking is still from the trained GNN.
+        </p>
+      ) : null}
+      <table className="table">
+        <thead>
+          <tr><th>Rank</th><th>Camera</th><th>Confidence</th></tr>
+        </thead>
+        <tbody>
+          {(prediction.ranked_candidates ?? []).map((item) => (
+            <tr key={`${item.rank}-${item.camera_id}`}>
+              <td>{item.rank}</td>
+              <td>{item.camera_id}</td>
+              <td>
+                <div className="progress" style={{ minWidth: 80 }}>
+                  <span style={{ width: `${Math.round(item.confidence * 100)}%` }} />
+                </div>
+                <span className="muted" style={{ marginLeft: 8 }}>{percent(item.confidence)}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h3 style={{ marginTop: 18 }}>Recent movement</h3>
+      <table className="table">
+        <thead>
+          <tr><th>#</th><th>Camera</th><th>Time</th></tr>
+        </thead>
+        <tbody>
+          {(prediction.history ?? []).map((item, index) => (
+            <tr key={`${item.camera_id}-${item.timestamp}-${index}`}>
+              <td>{index + 1}</td>
+              <td>{item.camera_id}</td>
+              <td>{item.timestamp ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted" style={{ marginTop: 12 }}>
+        Predicted at {prediction.prediction_timestamp ?? '—'}
+      </p>
+    </div>
+  )
+}
 
 export default function GraphPage() {
   const [data, setData] = useState<GraphPayload | null>(null)
+  const [selected, setSelected] = useState<string>('')
 
   useEffect(() => {
-    api.graph().then(setData)
+    api.graph().then((payload) => {
+      setData(payload)
+      const first = payload.gnn.predictions?.[0]?.tiger_id
+      if (first) setSelected(first)
+    })
   }, [])
+
+  const predictions = data?.gnn.predictions ?? []
+  const current = useMemo(
+    () => predictions.find((item) => item.tiger_id === selected) ?? predictions[0] ?? null,
+    [predictions, selected],
+  )
 
   if (!data) return <p className="muted">Loading graph…</p>
   const nodes = data.camera_graph.nodes
   const edges = data.camera_graph.edges
   const events = data.observation_graph.events
+  const gnn = data.gnn
 
   return (
     <div>
       <div className="page-head">
         <div>
           <h2>Observation graph</h2>
-          <p>Structured camera events for later animation and the GNN. No model is running here yet.</p>
+          <p>Camera events and next-camera ranking from the local DistanceAware GNN.</p>
         </div>
       </div>
+
       <article className="card">
+        <h3>GNN status</h3>
+        <table className="table">
+          <tbody>
+            <tr>
+              <td>Model</td>
+              <td>
+                <span className={`badge ${gnn.loaded ? 'ok' : 'warn'}`}>
+                  {gnn.loaded ? 'Loaded' : 'Unavailable'}
+                </span>
+              </td>
+            </tr>
+            <tr><td>Device</td><td>{gnn.device || '—'}</td></tr>
+            <tr><td>Version</td><td>{gnn.version || '—'}</td></tr>
+            <tr><td>Weights</td><td className="muted">{gnn.path || '—'}</td></tr>
+            {gnn.reason ? (
+              <tr><td>Reason</td><td className="error">{gnn.reason}</td></tr>
+            ) : null}
+          </tbody>
+        </table>
+      </article>
+
+      <article className="card" style={{ marginTop: 16 }}>
+        <h3>GNN prediction</h3>
+        {predictions.length === 0 ? (
+          <p className="empty">Need 5 identified camera observations for GNN prediction.</p>
+        ) : (
+          <>
+            <div className="field" style={{ maxWidth: 240, marginBottom: 16 }}>
+              <label>Tiger</label>
+              <select value={selected} onChange={(event) => setSelected(event.target.value)}>
+                {predictions.map((item) => (
+                  <option key={item.tiger_id} value={item.tiger_id}>
+                    {item.tiger_id}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {current ? <PredictionPanel prediction={current} /> : null}
+          </>
+        )}
+      </article>
+
+      <article className="card" style={{ marginTop: 16 }}>
         <h3>Cameras</h3>
         {nodes.length === 0 ? (
           <p className="empty">Import at least one camera folder to see nodes.</p>
@@ -77,9 +201,6 @@ export default function GraphPage() {
           )}
         </article>
       </div>
-      <p className="muted" style={{ marginTop: 16 }}>
-        GNN status: {data.gnn.implemented ? 'connected' : 'not implemented — drop the model into models/gnn later'}.
-      </p>
     </div>
   )
 }

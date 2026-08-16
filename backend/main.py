@@ -19,6 +19,7 @@ from backend.api.routes import (
     images,
     jobs,
     media,
+    observations,
     reviews,
     settings as settings_routes,
     tigers,
@@ -64,6 +65,7 @@ def create_app() -> FastAPI:
     application.include_router(images.router, prefix="/api")
     application.include_router(cameras.router, prefix="/api")
     application.include_router(tigers.router, prefix="/api")
+    application.include_router(observations.router, prefix="/api")
     application.include_router(graph.router, prefix="/api")
     application.include_router(media.router, prefix="/api")
 

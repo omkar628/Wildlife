@@ -96,6 +96,18 @@ def discover_reid_metadata() -> Path:
     return candidates[0]
 
 
+def discover_gnn_weights() -> Path:
+    candidates = [
+        PROJECT_ROOT / "models" / "gnn" / "gnn_model_v3_optimized_best.pt",
+        PROJECT_ROOT / "models" / "gnn_model_v3_optimized_best.pt",
+        PROJECT_ROOT / "gnn_model_v3_optimized_best.pt",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[-1]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="WI_",
@@ -118,6 +130,9 @@ class Settings(BaseSettings):
     reid_weights_path: Path | None = None
     reid_index_path: Path | None = None
     reid_metadata_path: Path | None = None
+
+    gnn_weights_path: Path | None = None
+    gnn_device: str = "auto"
 
     database_path: Path = Path("database/wildlife.db")
     crops_dir: Path = Path("data/crops")
@@ -220,6 +235,18 @@ class Settings(BaseSettings):
                 self.reid_metadata_path, discover_reid_metadata()
             )
 
+        if "WI_GNN_DEVICE" not in os.environ:
+            value = _yaml_get(yaml_data, "gnn", "device")
+            if value is not None:
+                self.gnn_device = str(value)
+
+        if self.gnn_weights_path is None or str(self.gnn_weights_path).strip() == "":
+            self.gnn_weights_path = discover_gnn_weights()
+        else:
+            self.gnn_weights_path = _resolve_path(
+                self.gnn_weights_path, discover_gnn_weights()
+            )
+
     def ensure_directories(self) -> None:
         for path in (
             self.database_path.parent,
@@ -256,6 +283,9 @@ class Settings(BaseSettings):
             and self.reid_metadata_path
             and self.reid_metadata_path.is_file()
         )
+
+    def gnn_weights_exist(self) -> bool:
+        return bool(self.gnn_weights_path and self.gnn_weights_path.is_file())
 
 
 @lru_cache(maxsize=1)

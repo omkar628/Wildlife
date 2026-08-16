@@ -3,18 +3,33 @@ from pathlib import Path
 from PIL import Image
 
 from backend.ingestion.metadata import extract_image_metadata
-from backend.ingestion.scanner import iter_image_files
+from backend.ingestion.scanner import discover_camera_folders, iter_image_files
 from tests.image_helpers import make_jpeg
 
 
 def test_scanner_finds_nested_images_and_ignores_other_files(tmp_path: Path):
     make_jpeg(tmp_path / "C01" / "one.jpg")
     make_jpeg(tmp_path / "C01" / "nested" / "two.PNG")
+    Image.new("RGB", (16, 16), (10, 10, 10)).save(tmp_path / "C01" / "shot.webp", format="WEBP")
     (tmp_path / "C01" / "notes.txt").write_text("ignore", encoding="utf-8")
     (tmp_path / "C01" / "video.mp4").write_bytes(b"00")
     found = iter_image_files(tmp_path / "C01")
     names = sorted(path.name.lower() for path in found)
-    assert names == ["one.jpg", "two.png"]
+    assert names == ["one.jpg", "shot.webp", "two.png"]
+
+
+def test_discover_camera_folders_from_parent(tmp_path: Path):
+    root = tmp_path / "CameraTrapData"
+    make_jpeg(root / "Camera_01" / "IMG001.JPG")
+    make_jpeg(root / "Camera_01" / "IMG002.JPG")
+    make_jpeg(root / "Camera_02" / "IMG003.JPG")
+    preview = discover_camera_folders(root)
+    assert preview["total_images"] == 3
+    assert preview["camera_count"] == 2
+    names = [item["folder_name"] for item in preview["camera_folders"]]
+    assert names == ["Camera_01", "Camera_02"]
+    assert preview["camera_folders"][0]["suggested_camera_id"] == "Camera_01"
+    assert preview["camera_folders"][0]["image_count"] == 2
 
 
 def test_scanner_missing_folder(tmp_path: Path):

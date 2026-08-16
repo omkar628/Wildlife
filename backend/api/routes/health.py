@@ -2,12 +2,32 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from backend.api.deps import get_detector, get_reid_adapter, settings_dep
+from backend.api.deps import (
+    get_detector,
+    get_gnn_service,
+    get_identity_service,
+    get_reid_adapter,
+    settings_dep,
+)
 from backend.config import Settings
 from backend.detector.service import DetectorService
 from backend.reid.adapter import UnavailableReIDAdapter
+from backend.reid.identity import LocalIdentityService
+from backend.services.gnn_service import GNNService
 
 router = APIRouter(tags=["health"])
+
+
+def _gnn_status(gnn: GNNService) -> dict:
+    try:
+        return gnn.status()
+    except Exception as exc:
+        return {
+            "loaded": False,
+            "device": "cpu",
+            "path": None,
+            "reason": str(exc),
+        }
 
 
 @router.get("/health")
@@ -15,7 +35,11 @@ def health(
     settings: Settings = Depends(settings_dep),
     detector: DetectorService = Depends(get_detector),
     reid: UnavailableReIDAdapter = Depends(get_reid_adapter),
+    identity: LocalIdentityService = Depends(get_identity_service),
+    gnn: GNNService = Depends(get_gnn_service),
 ) -> dict:
+    reid_status = reid.status()
+    reid_status["local_identity"] = identity.status()
     return {
         "status": "ok",
         "offline": True,
@@ -24,7 +48,8 @@ def health(
             "path": str(settings.detector_model_path),
             "device": detector.device,
         },
-        "reid": reid.status(),
+        "reid": reid_status,
+        "gnn": _gnn_status(gnn),
         "database": str(settings.database_path),
         "confidence": {
             "auto_accept": settings.confidence_auto_accept,

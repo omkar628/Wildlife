@@ -215,6 +215,25 @@ img { max-width: 100%; display: block; }
   outline: none;
 }
 .field input:focus { border-color: var(--gold); }
+.path-display {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--bg-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  word-break: break-all;
+  color: var(--muted);
+}
+.path-display.ready {
+  color: var(--text);
+  border-style: solid;
+  border-color: rgba(224, 161, 74, 0.45);
+}
+.field code {
+  font-family: var(--mono);
+  color: var(--gold);
+}
 .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .row-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 

@@ -1,16 +1,21 @@
 # Wildlife Intelligence UI
 
-React + Vite frontend.
+React + Vite frontend. The desktop shell is Electron in the project root.
+
+From the project root:
 
 ```bat
-cd frontend
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173
+That opens the Electron window with Vite hot reload.
 
-The Vite dev server proxies `/api` to `http://127.0.0.1:8000`.
-Start the FastAPI backend first.
+Browser-only preview (no native folder picker):
 
-See the project root `README.md` for the full workflow.
+```bat
+cd frontend
+npm run dev
+```
+
+Vite proxies `/api` to `http://127.0.0.1:8000`.

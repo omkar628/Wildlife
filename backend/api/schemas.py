@@ -16,8 +16,21 @@ class ImportRequest(BaseModel):
     habitat: str | None = None
 
 
+class ImportPreviewRequest(BaseModel):
+    folder_path: str = Field(..., min_length=1)
+
+
+class BatchImportRequest(BaseModel):
+    cameras: list[ImportRequest] = Field(..., min_length=1)
+
+
 class ReviewDecisionRequest(BaseModel):
     human_class: str = Field(..., min_length=1)
+
+
+class IdentityAssignRequest(BaseModel):
+    action: str = Field(..., min_length=1)
+    tiger_id: str | None = None
 
 
 class SettingsUpdateRequest(BaseModel):

@@ -2,16 +2,30 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from backend.api.deps import get_graph_service, get_reid_adapter
+from backend.api.deps import get_gnn_service, get_graph_service, get_reid_adapter
 from backend.graph.builder import GraphService
 from backend.reid.adapter import UnavailableReIDAdapter
+from backend.services.gnn_service import GNNService
 
 router = APIRouter(prefix="/graph", tags=["graph"])
 
 
 @router.get("")
-def get_graph(graph: GraphService = Depends(get_graph_service)) -> dict:
-    return graph.export_payload()
+def get_graph(
+    graph: GraphService = Depends(get_graph_service),
+    gnn: GNNService = Depends(get_gnn_service),
+) -> dict:
+    payload = graph.export_payload()
+    try:
+        payload["gnn"] = gnn.graph_payload()
+    except Exception as exc:
+        payload["gnn"] = {
+            "implemented": True,
+            "loaded": False,
+            "reason": str(exc),
+            "predictions": [],
+        }
+    return payload
 
 
 @router.get("/cameras")
@@ -25,6 +39,14 @@ def observation_graph(
     graph: GraphService = Depends(get_graph_service),
 ) -> dict:
     return graph.build_tiger_observation_graph(tiger_id=tiger_id).to_dict()
+
+
+@router.get("/predictions")
+def gnn_predictions(
+    tiger_id: str | None = Query(default=None),
+    gnn: GNNService = Depends(get_gnn_service),
+) -> dict:
+    return gnn.predict_for_tiger(tiger_id)
 
 
 @router.get("/reid-status")

@@ -54,6 +54,10 @@ def test_health_endpoint(tmp_settings):
     assert body["offline"] is True
     assert "detector" in body
     assert body["reid"]["implemented"] is False
+    assert "gnn" in body
+    assert "loaded" in body["gnn"]
+    assert "device" in body["gnn"]
+    assert "path" in body["gnn"]
 
 
 def test_dashboard_endpoint(tmp_settings):
@@ -119,4 +123,55 @@ def test_import_and_job_status(tmp_settings, tmp_path):
     assert cameras[0]["camera_id"] == "C01"
     graph = client.get("/api/graph").json()
     assert "camera_graph" in graph
-    assert graph["gnn"]["implemented"] is False
+    assert graph["gnn"]["implemented"] is True
+    assert "loaded" in graph["gnn"]
+
+
+def test_import_preview_discovers_camera_folders(tmp_settings, tmp_path):
+    root = tmp_path / "CameraTrapData"
+    make_jpeg(root / "Camera_01" / "IMG001.JPG")
+    make_jpeg(root / "Camera_02" / "IMG003.JPG")
+    client = _client(tmp_settings)
+    response = client.post("/api/import/preview", json={"folder_path": str(root)})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_images"] == 2
+    assert body["camera_count"] == 2
+    names = [item["folder_name"] for item in body["camera_folders"]]
+    assert names == ["Camera_01", "Camera_02"]
+    assert body["camera_folders"][0]["camera_exists"] is False
+
+
+def test_import_batch_starts_one_job_per_camera(tmp_settings, tmp_path):
+    root = tmp_path / "CameraTrapData"
+    make_jpeg(root / "Camera_01" / "a.jpg")
+    make_jpeg(root / "Camera_02" / "b.jpg")
+    client = _client(tmp_settings)
+    response = client.post(
+        "/api/import/batch",
+        json={
+            "cameras": [
+                {"folder_path": str(root / "Camera_01"), "camera_id": "C01"},
+                {"folder_path": str(root / "Camera_02"), "camera_id": "C02"},
+            ]
+        },
+    )
+    assert response.status_code == 200
+    jobs = response.json()["jobs"]
+    assert {job["camera_id"] for job in jobs} == {"C01", "C02"}
+
+    deadline = time.time() + 10
+    finished = False
+    while time.time() < deadline:
+        listed = client.get("/api/jobs").json()["jobs"]
+        ours = [job for job in listed if job["job_id"] in {item["job_id"] for item in jobs}]
+        if ours and all(job["status"] in {"completed", "failed", "cancelled"} for job in ours):
+            finished = True
+            assert all(job["status"] == "completed" for job in ours)
+            break
+        time.sleep(0.05)
+    assert finished
+    cameras = {item["camera_id"] for item in client.get("/api/cameras").json()["cameras"]}
+    assert cameras == {"C01", "C02"}
+    unidentified = client.get("/api/observations/unidentified").json()
+    assert unidentified["pending"] >= 1

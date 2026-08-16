@@ -28,6 +28,10 @@ crops:
   padding: 0.05
   jpeg_quality: 95
 
+gnn:
+  # auto | cpu | cuda | cuda:0
+  device: auto
+
 paths:
   database: database/wildlife.db
   crops: data/crops

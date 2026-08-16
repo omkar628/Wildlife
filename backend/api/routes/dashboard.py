@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from backend.api.deps import db_dep, get_review_service, settings_dep
+from backend.api.deps import db_dep, get_identity_service, get_review_service, settings_dep
 from backend.config import Settings
 from backend.database.connection import Database
 from backend.database.repositories import (
@@ -11,6 +11,7 @@ from backend.database.repositories import (
     JobRepository,
     TigerRepository,
 )
+from backend.reid.identity import LocalIdentityService
 from backend.review.service import ReviewService
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -21,6 +22,7 @@ def dashboard(
     db: Database = Depends(db_dep),
     settings: Settings = Depends(settings_dep),
     reviews: ReviewService = Depends(get_review_service),
+    identity: LocalIdentityService = Depends(get_identity_service),
 ) -> dict:
     class_counts = DetectionRepository(db).class_counts()
     status_counts = ImageRepository(db).count_by_status()
@@ -43,6 +45,7 @@ def dashboard(
         },
         "review": {
             "pending": reviews.pending_count(),
+            "unidentified_tigers": identity.unidentified_count(),
         },
         "tigers": {
             "known": len(tigers),

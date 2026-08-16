@@ -7,6 +7,11 @@ env/
 node_modules/
 frontend/dist/
 frontend/.vite/
+
+# Electron packaging output (not used yet)
+release/
+out/
+dist-electron/
 *.log
 npm-debug.log*
 

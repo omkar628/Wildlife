@@ -35,5 +35,5 @@ def test_graph_builds_camera_nodes_and_tiger_edges(db):
     history = graph.get_tiger_history("T017")
     assert [event.camera_id for event in history] == ["C01", "C02"]
     payload = graph.export_payload()
-    assert payload["gnn"]["implemented"] is False
+    assert payload["gnn"]["implemented"] is True
     assert payload["observation_graph"]["events"]

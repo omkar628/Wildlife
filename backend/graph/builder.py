@@ -157,8 +157,8 @@ class GraphService:
             "camera_graph": camera_graph.to_dict(),
             "observation_graph": observation_graph.to_dict(),
             "gnn": {
-                "implemented": False,
-                "expected_input": "camera_graph + observation_graph",
+                "implemented": True,
+                "expected_input": "identified tiger history + live camera graph",
                 "expected_output_example": {
                     "tiger_id": "T017",
                     "camera_id": "C02",

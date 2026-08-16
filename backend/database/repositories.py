@@ -417,6 +417,54 @@ class ObservationRepository:
         )
         return row_to_dict(row) if row else None
 
+    def get_joined(self, observation_id: int) -> dict[str, Any] | None:
+        row = self.db.fetchone(
+            """
+            SELECT o.*, d.confidence, d.class_name, d.final_class_name,
+                   d.image_id, d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
+                   i.camera_id, i.original_path, i.filename,
+                   i.timestamp AS image_timestamp,
+                   i.width AS image_width, i.height AS image_height
+            FROM tiger_observations o
+            JOIN detections d ON d.detection_id = o.detection_id
+            JOIN images i ON i.image_id = d.image_id
+            WHERE o.observation_id = ?
+            """,
+            (observation_id,),
+        )
+        return row_to_dict(row) if row else None
+
+    def list_unidentified(self, limit: int = 40) -> list[dict[str, Any]]:
+        rows = self.db.fetchall(
+            """
+            SELECT o.*, d.confidence, d.class_name, d.final_class_name,
+                   d.image_id, d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
+                   i.camera_id, i.original_path, i.filename,
+                   i.timestamp AS image_timestamp,
+                   i.width AS image_width, i.height AS image_height
+            FROM tiger_observations o
+            JOIN detections d ON d.detection_id = o.detection_id
+            JOIN images i ON i.image_id = d.image_id
+            WHERE o.tiger_id IS NULL
+            ORDER BY o.observation_id
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [row_to_dict(row) for row in rows]
+
+    def unidentified_count(self) -> int:
+        row = self.db.fetchone(
+            "SELECT COUNT(*) AS n FROM tiger_observations WHERE tiger_id IS NULL"
+        )
+        return int(row["n"]) if row else 0
+
+    def mark_human_verified(self, observation_id: int, verified: bool = True) -> None:
+        self.db.execute(
+            "UPDATE tiger_observations SET human_verified = ? WHERE observation_id = ?",
+            (1 if verified else 0, observation_id),
+        )
+
     def set_crop_path(self, observation_id: int, crop_path: str) -> None:
         self.db.execute(
             "UPDATE tiger_observations SET crop_path = ? WHERE observation_id = ?",
@@ -454,7 +502,8 @@ class ObservationRepository:
     def list_for_tiger(self, tiger_id: str) -> list[dict[str, Any]]:
         rows = self.db.fetchall(
             """
-            SELECT o.*, d.confidence, i.camera_id, i.original_path, i.filename
+            SELECT o.*, d.confidence, i.camera_id, i.original_path, i.filename,
+                   i.timestamp AS image_timestamp
             FROM tiger_observations o
             JOIN detections d ON d.detection_id = o.detection_id
             JOIN images i ON i.image_id = d.image_id

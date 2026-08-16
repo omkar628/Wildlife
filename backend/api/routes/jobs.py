@@ -3,12 +3,60 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.deps import db_dep, get_pipeline
-from backend.api.schemas import ImportRequest
+from backend.api.schemas import BatchImportRequest, ImportPreviewRequest, ImportRequest
 from backend.database.connection import Database
-from backend.database.repositories import ErrorRepository, JobRepository
+from backend.database.repositories import CameraRepository, ErrorRepository, JobRepository
+from backend.ingestion.scanner import discover_camera_folders
 from backend.services.pipeline import PipelineService
 
 router = APIRouter(tags=["jobs"])
+
+
+@router.post("/import/preview")
+def preview_import(
+    payload: ImportPreviewRequest,
+    db: Database = Depends(db_dep),
+) -> dict:
+    try:
+        preview = discover_camera_folders(payload.folder_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    known = {row["camera_id"] for row in CameraRepository(db).list_all()}
+    folders = []
+    for item in preview["camera_folders"]:
+        suggested = item["suggested_camera_id"]
+        folders.append(
+            {
+                **item,
+                "camera_exists": suggested in known,
+            }
+        )
+    preview["camera_folders"] = folders
+    preview["known_cameras"] = sorted(known)
+    return preview
+
+
+@router.post("/import/batch")
+def start_batch_import(
+    payload: BatchImportRequest,
+    pipeline: PipelineService = Depends(get_pipeline),
+) -> dict:
+    jobs = []
+    for item in payload.cameras:
+        try:
+            jobs.append(
+                pipeline.start_import(
+                    folder_path=item.folder_path,
+                    camera_id=item.camera_id,
+                    latitude=item.latitude,
+                    longitude=item.longitude,
+                    elevation=item.elevation,
+                    habitat=item.habitat,
+                )
+            )
+        except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"jobs": jobs}
 
 
 @router.post("/import")

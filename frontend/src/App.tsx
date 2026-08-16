@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Health } from './api'
+import { isDesktopApp } from './desktop'
 import DashboardPage from './pages/Dashboard'
 import ImportPage from './pages/ImportFolder'
 import JobsPage from './pages/Jobs'
@@ -11,7 +12,7 @@ import GraphPage from './pages/GraphView'
 
 const ROUTES = [
   { hash: '#/', label: 'Dashboard' },
-  { hash: '#/import', label: 'Import folder' },
+  { hash: '#/import', label: 'Camera Trap Import' },
   { hash: '#/jobs', label: 'Processing' },
   { hash: '#/detections', label: 'Detections' },
   { hash: '#/review', label: 'Human review' },
@@ -35,7 +36,7 @@ export default function App() {
     api.health().then(setHealth).catch(() => setHealth(null))
     const tick = () => {
       api.dashboard()
-        .then((d) => setPending(d.review.pending))
+        .then((d) => setPending(d.review.pending + (d.review.unidentified_tigers ?? 0)))
         .catch(() => undefined)
     }
     tick()
@@ -69,12 +70,20 @@ export default function App() {
         </nav>
         <div className="sidebar-foot">
           <div>
+            <span className={`dot ${isDesktopApp() ? 'ok' : 'warn'}`} />
+            {isDesktopApp() ? 'Desktop app' : 'Browser preview'}
+          </div>
+          <div style={{ marginTop: 8 }}>
             <span className={`dot ${health?.detector.available ? 'ok' : 'warn'}`} />
             Detector {health?.detector.available ? 'ready' : 'weights missing'}
           </div>
           <div style={{ marginTop: 8 }}>
             <span className="dot warn" />
-            Re-ID adapter only
+            Identity: human confirm
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <span className={`dot ${health?.gnn?.loaded ? 'ok' : 'warn'}`} />
+            GNN {health?.gnn?.loaded ? `${health.gnn.device}` : 'unavailable'}
           </div>
         </div>
       </aside>

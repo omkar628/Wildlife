@@ -110,53 +110,55 @@ If you already have PyTorch in the same Python and want the venv to see it:
 python -m venv .venv --system-site-packages
 ```
 
-## 3. Frontend packages
+## 3. Node packages
+
+Install once from the **project root** (Electron) and once in `frontend` (Vite/React):
 
 ```bat
+cd /d F:\WildlifeIntelligence
+npm install
 cd frontend
 npm install
 cd ..
 ```
 
-## 4. Start the backend (Terminal 1)
-
-Always start from the project root so `backend.main:app` can be imported.
+## 4. Start the desktop app (one command)
 
 ```bat
 cd /d F:\WildlifeIntelligence
-.venv\Scripts\activate
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+npm run dev
 ```
 
-Or:
+This starts:
 
-```bat
-python main.py
-```
+1. Python/FastAPI on http://127.0.0.1:8000
+2. Vite on http://127.0.0.1:5173 (hot reload)
+3. An Electron desktop window that loads the Vite UI
+
+You should **not** need to type a folder path. Use **Select Camera Folder**.
+
+Optional: keep a browser preview at http://localhost:5173 with `npm run dev:web`,
+but the native folder picker only works inside the Electron window.
 
 API docs: http://127.0.0.1:8000/docs
 Health: http://127.0.0.1:8000/api/health
 
-## 5. Start the frontend (Terminal 2)
+To start only the backend by hand:
 
 ```bat
-cd /d F:\WildlifeIntelligence\frontend
-npm run dev
+.venv\Scripts\activate
+uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Open Chrome at **http://localhost:5173**.
+## 5. Import a camera folder
 
-Vite proxies `/api` to the FastAPI server, so leave both terminals running.
-Frontend edits hot-reload. Backend edits reload via `--reload`.
-
-## 6. Import a camera folder
-
-1. Open **Import folder**.
-2. Paste a path such as `D:\CameraTrap\C01`.
-3. Set **Camera ID** to `C01` (or any id you use).
-4. Optionally add latitude, longitude, elevation, habitat.
-5. Adjust the auto-accept threshold if needed (default **0.60**).
-6. Click **Start processing**.
+1. In the desktop window open **Import folder**.
+2. Click **Select Camera Folder**.
+3. Choose an SD card or local folder in the Windows dialog (for example `D:\CameraTrap\C01`).
+4. Confirm or edit the Camera ID (filled from the folder name when possible).
+5. Optionally add latitude, longitude, elevation, habitat.
+6. Adjust the auto-accept threshold if needed (default **0.60**).
+7. Click **Start processing**.
 
 The UI stays responsive. Progress is on the **Processing** page.
 
@@ -194,12 +196,15 @@ Everything in between goes to the review queue.
 
 ## Development workflow
 
-Keep it to two terminals and Chrome. Do not package an `.exe` yet.
+One terminal. Do not package an `.exe` yet.
 
 ```
-Terminal 1   uvicorn backend.main:app --reload
-Terminal 2   cd frontend && npm run dev
-Chrome       http://localhost:5173
+Project folder:
+    npm run dev
+
+Electron window opens.
+Vite hot-reloads UI changes.
+FastAPI --reload picks up backend changes.
 ```
 
 ## Tests
@@ -244,6 +249,7 @@ WildlifeIntelligence/
 │   ├── reid/                       adapter only
 │   ├── graph/                      camera / observation graphs, no GNN
 │   └── services/                   pipeline, crops, confidence
+├── electron/                       Desktop shell + native folder picker
 ├── frontend/                       React + Vite
 ├── config/settings.yaml
 ├── database/wildlife.db            created on first run
@@ -268,7 +274,13 @@ Run uvicorn from `F:\WildlifeIntelligence`, not from `backend\`.
 Confirm `best.pt` is still in the project root. Check `/api/health`.
 
 **Frontend cannot reach the API**
-Start the backend first. Vite proxies `/api` to `127.0.0.1:8000`.
+Use `npm run dev` from the project root so backend, Vite, and Electron start together.
+
+**Select Camera Folder does nothing / says desktop app required**
+You are in a browser tab. Close Chrome and run `npm run dev` so the Electron window opens.
+
+**Folder picker cannot see the SD card**
+Wait until Windows assigns a drive letter, then click Select Camera Folder again.
 
 **`ultralytics` or OpenCV install fails**
 Install Visual C++ redistributable, then `pip install -r requirements.txt` again.
@@ -290,3 +302,5 @@ Stop the other process, or change `WI_PORT` / the Vite `server.port`.
 `.gitignore` excludes virtualenvs, `node_modules`, model weights (`*.pt`,
 `*.pth`, `*.faiss`, `*.pkl`), SQLite files, and generated `data/` / `logs/`.
 Do not commit the trained assets to a normal Git remote.
+#   W i l d l i f e  
+ 

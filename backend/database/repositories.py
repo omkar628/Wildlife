@@ -13,8 +13,39 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def coordinates_are_valid(latitude: Any, longitude: Any) -> bool:
+    try:
+        lat = float(latitude)
+        lon = float(longitude)
+    except (TypeError, ValueError):
+        return False
+    return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+
+
 def row_to_dict(row: Any) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def normalize_camera_id(camera_id: str) -> str:
+    cleaned = (camera_id or "").strip()
+    if not cleaned:
+        raise ValueError("camera_id is required.")
+    if len(cleaned) > 64:
+        raise ValueError("camera_id must be 64 characters or fewer.")
+    allowed = []
+    for char in cleaned:
+        if char.isalnum() or char in "._-":
+            allowed.append(char)
+        elif char in {" ", "\t"}:
+            allowed.append("_")
+        else:
+            raise ValueError(
+                "camera_id may contain letters, numbers, '.', '_' and '-' only."
+            )
+    normalized = "".join(allowed).strip("._-")
+    if not normalized:
+        raise ValueError("camera_id is required.")
+    return normalized
 
 
 class CameraRepository:
@@ -29,32 +60,215 @@ class CameraRepository:
         elevation: float | None = None,
         habitat: str | None = None,
         metadata: str | None = None,
+        name: str | None = None,
+        enabled: bool | None = None,
     ) -> dict[str, Any]:
+        camera_id = normalize_camera_id(camera_id)
         existing = self.get(camera_id)
         if existing is None:
             self.db.execute(
                 """
-                INSERT INTO cameras(camera_id, latitude, longitude, elevation, habitat, metadata, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO cameras(
+                    camera_id, name, latitude, longitude, elevation,
+                    habitat, metadata, enabled, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (camera_id, latitude, longitude, elevation, habitat, metadata, utc_now()),
+                (
+                    camera_id,
+                    (name or camera_id).strip() or camera_id,
+                    latitude,
+                    longitude,
+                    elevation,
+                    habitat,
+                    metadata,
+                    1 if enabled is None or enabled else 0,
+                    utc_now(),
+                ),
             )
         else:
             self.db.execute(
                 """
                 UPDATE cameras
-                SET latitude = COALESCE(?, latitude),
+                SET name = COALESCE(?, name),
+                    latitude = COALESCE(?, latitude),
                     longitude = COALESCE(?, longitude),
                     elevation = COALESCE(?, elevation),
                     habitat = COALESCE(?, habitat),
-                    metadata = COALESCE(?, metadata)
+                    metadata = COALESCE(?, metadata),
+                    enabled = COALESCE(?, enabled)
                 WHERE camera_id = ?
                 """,
-                (latitude, longitude, elevation, habitat, metadata, camera_id),
+                (
+                    name.strip() if isinstance(name, str) and name.strip() else None,
+                    latitude,
+                    longitude,
+                    elevation,
+                    habitat,
+                    metadata,
+                    None if enabled is None else (1 if enabled else 0),
+                    camera_id,
+                ),
             )
         found = self.get(camera_id)
         assert found is not None
         return found
+
+    def create(
+        self,
+        camera_id: str,
+        name: str | None = None,
+        latitude: float | None = None,
+        longitude: float | None = None,
+        elevation: float | None = None,
+        habitat: str | None = None,
+        metadata: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        camera_id = normalize_camera_id(camera_id)
+        if self.get(camera_id) is not None:
+            raise ValueError(f"Camera ID already exists: {camera_id}")
+        return self.upsert(
+            camera_id,
+            latitude=latitude,
+            longitude=longitude,
+            elevation=elevation,
+            habitat=habitat,
+            metadata=metadata,
+            name=name,
+            enabled=enabled,
+        )
+
+    def update(
+        self,
+        camera_id: str,
+        *,
+        name: str | None = None,
+        latitude: Any = ...,
+        longitude: Any = ...,
+        elevation: Any = ...,
+        habitat: Any = ...,
+        metadata: Any = ...,
+        enabled: bool | None = None,
+        new_camera_id: str | None = None,
+    ) -> dict[str, Any]:
+        existing = self.get(camera_id)
+        if existing is None:
+            raise KeyError(f"Camera not found: {camera_id}")
+
+        target_id = camera_id
+        if new_camera_id is not None:
+            target_id = normalize_camera_id(new_camera_id)
+            if target_id != camera_id:
+                if self.get(target_id) is not None:
+                    raise ValueError(f"Camera ID already exists: {target_id}")
+                self._rename(camera_id, target_id)
+                existing = self.get(target_id)
+                assert existing is not None
+
+        assignments: list[str] = []
+        values: list[Any] = []
+        if name is not None:
+            assignments.append("name = ?")
+            values.append(name.strip() or target_id)
+        if latitude is not ...:
+            assignments.append("latitude = ?")
+            values.append(latitude)
+        if longitude is not ...:
+            assignments.append("longitude = ?")
+            values.append(longitude)
+        if elevation is not ...:
+            assignments.append("elevation = ?")
+            values.append(elevation)
+        if habitat is not ...:
+            assignments.append("habitat = ?")
+            values.append(habitat)
+        if metadata is not ...:
+            assignments.append("metadata = ?")
+            values.append(metadata)
+        if enabled is not None:
+            assignments.append("enabled = ?")
+            values.append(1 if enabled else 0)
+        if assignments:
+            values.append(target_id)
+            self.db.execute(
+                f"UPDATE cameras SET {', '.join(assignments)} WHERE camera_id = ?",
+                values,
+            )
+        found = self.get(target_id)
+        assert found is not None
+        return found
+
+    def _rename(self, old_id: str, new_id: str) -> None:
+        """Change a camera primary key and rewrite foreign keys."""
+        row = self.get(old_id)
+        if row is None:
+            raise KeyError(f"Camera not found: {old_id}")
+        self.db.execute(
+            """
+            INSERT INTO cameras(
+                camera_id, name, latitude, longitude, elevation,
+                habitat, metadata, enabled, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id,
+                row.get("name") or new_id,
+                row.get("latitude"),
+                row.get("longitude"),
+                row.get("elevation"),
+                row.get("habitat"),
+                row.get("metadata"),
+                0 if row.get("enabled") in {0, "0", False} else 1,
+                row.get("created_at") or utc_now(),
+            ),
+        )
+        self.db.execute(
+            "UPDATE images SET camera_id = ? WHERE camera_id = ?",
+            (new_id, old_id),
+        )
+        self.db.execute(
+            "UPDATE import_jobs SET camera_id = ? WHERE camera_id = ?",
+            (new_id, old_id),
+        )
+        self.db.execute("DELETE FROM cameras WHERE camera_id = ?", (old_id,))
+
+    def set_enabled(self, camera_id: str, enabled: bool) -> dict[str, Any]:
+        existing = self.get(camera_id)
+        if existing is None:
+            raise KeyError(f"Camera not found: {camera_id}")
+        self.db.execute(
+            "UPDATE cameras SET enabled = ? WHERE camera_id = ?",
+            (1 if enabled else 0, camera_id),
+        )
+        found = self.get(camera_id)
+        assert found is not None
+        return found
+
+    def delete(self, camera_id: str) -> None:
+        existing = self.get(camera_id)
+        if existing is None:
+            raise KeyError(f"Camera not found: {camera_id}")
+        image_row = self.db.fetchone(
+            "SELECT COUNT(*) AS n FROM images WHERE camera_id = ?",
+            (camera_id,),
+        )
+        image_count = int(image_row["n"]) if image_row else 0
+        if image_count > 0:
+            raise ValueError(
+                f"Cannot delete {camera_id}: {image_count} images are linked. "
+                "Disable the camera instead."
+            )
+        self.db.execute(
+            """
+            DELETE FROM image_errors
+            WHERE job_id IN (SELECT job_id FROM import_jobs WHERE camera_id = ?)
+            """,
+            (camera_id,),
+        )
+        self.db.execute("DELETE FROM import_jobs WHERE camera_id = ?", (camera_id,))
+        self.db.execute("DELETE FROM cameras WHERE camera_id = ?", (camera_id,))
 
     def get(self, camera_id: str) -> dict[str, Any] | None:
         row = self.db.fetchone("SELECT * FROM cameras WHERE camera_id = ?", (camera_id,))
@@ -62,6 +276,82 @@ class CameraRepository:
 
     def list_all(self) -> list[dict[str, Any]]:
         return [row_to_dict(row) for row in self.db.fetchall("SELECT * FROM cameras ORDER BY camera_id")]
+
+    def list_with_stats(self) -> list[dict[str, Any]]:
+        cameras = self.list_all()
+        if not cameras:
+            return []
+        image_counts = {
+            str(row["camera_id"]): int(row["n"])
+            for row in self.db.fetchall(
+                """
+                SELECT camera_id, COUNT(*) AS n
+                FROM images
+                WHERE camera_id IS NOT NULL
+                GROUP BY camera_id
+                """
+            )
+        }
+        class_counts: dict[str, dict[str, int]] = {}
+        for row in self.db.fetchall(
+            """
+            SELECT i.camera_id AS camera_id,
+                   LOWER(COALESCE(d.final_class_name, d.class_name)) AS class_name,
+                   COUNT(*) AS n
+            FROM detections d
+            JOIN images i ON i.image_id = d.image_id
+            WHERE i.camera_id IS NOT NULL
+              AND d.review_status != 'ignored'
+            GROUP BY i.camera_id, LOWER(COALESCE(d.final_class_name, d.class_name))
+            """
+        ):
+            camera_id = str(row["camera_id"])
+            bucket = class_counts.setdefault(
+                camera_id, {"tiger": 0, "prey": 0, "rival": 0, "human": 0, "other": 0}
+            )
+            name = str(row["class_name"] or "other")
+            if name not in bucket:
+                name = "other"
+            bucket[name] += int(row["n"])
+        observation_counts = {
+            str(row["camera_id"]): int(row["n"])
+            for row in self.db.fetchall(
+                """
+                SELECT i.camera_id AS camera_id, COUNT(*) AS n
+                FROM detections d
+                JOIN images i ON i.image_id = d.image_id
+                WHERE i.camera_id IS NOT NULL
+                  AND d.review_status != 'ignored'
+                GROUP BY i.camera_id
+                """
+            )
+        }
+        out: list[dict[str, Any]] = []
+        for camera in cameras:
+            camera_id = str(camera["camera_id"])
+            counts = class_counts.get(
+                camera_id, {"tiger": 0, "prey": 0, "rival": 0, "human": 0, "other": 0}
+            )
+            enabled = camera.get("enabled") not in {0, "0", False}
+            payload = dict(camera)
+            payload.update(
+                {
+                    "name": camera.get("name") or camera_id,
+                    "enabled": enabled,
+                    "status": "enabled" if enabled else "disabled",
+                    "image_count": image_counts.get(camera_id, 0),
+                    "observation_count": observation_counts.get(camera_id, 0),
+                    "tiger_count": counts["tiger"],
+                    "prey_count": counts["prey"],
+                    "rival_count": counts["rival"],
+                    "human_count": counts["human"],
+                    "missing_coordinates": not coordinates_are_valid(
+                        camera.get("latitude"), camera.get("longitude")
+                    ),
+                }
+            )
+            out.append(payload)
+        return out
 
 
 class JobRepository:
@@ -303,6 +593,12 @@ class DetectionRepository:
             ),
         )
 
+    def set_classified_path(self, detection_id: int, classified_path: str) -> None:
+        self.db.execute(
+            "UPDATE detections SET classified_path = ? WHERE detection_id = ?",
+            (classified_path, detection_id),
+        )
+
     def class_counts(self) -> dict[str, int]:
         rows = self.db.fetchall(
             """
@@ -313,6 +609,51 @@ class DetectionRepository:
             """
         )
         return {str(row["name"]): int(row["n"]) for row in rows}
+
+    def list_for_movement(
+        self,
+        animal_class: str | None = None,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Accepted, non-ignored detections joined to camera and timestamp."""
+        clauses = [
+            "d.review_status != 'ignored'",
+            "d.accepted = 1",
+            "i.camera_id IS NOT NULL",
+        ]
+        params: list[Any] = []
+        if animal_class:
+            clauses.append("LOWER(COALESCE(d.final_class_name, d.class_name)) = ?")
+            params.append(animal_class.strip().lower())
+        if camera_id:
+            clauses.append("i.camera_id = ?")
+            params.append(camera_id)
+        if time_from:
+            clauses.append("COALESCE(i.timestamp, d.created_at) >= ?")
+            params.append(time_from)
+        if time_to:
+            clauses.append("COALESCE(i.timestamp, d.created_at) <= ?")
+            params.append(time_to)
+        where = " AND ".join(clauses)
+        rows = self.db.fetchall(
+            f"""
+            SELECT d.detection_id, d.image_id, d.confidence,
+                   d.class_name, d.final_class_name,
+                   d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
+                   i.camera_id, i.filename, i.original_path,
+                   COALESCE(i.timestamp, d.created_at) AS timestamp,
+                   o.observation_id, o.tiger_id, o.reid_confidence, o.crop_path
+            FROM detections d
+            JOIN images i ON i.image_id = d.image_id
+            LEFT JOIN tiger_observations o ON o.detection_id = d.detection_id
+            WHERE {where}
+            ORDER BY COALESCE(i.timestamp, d.created_at), d.detection_id
+            """,
+            params,
+        )
+        return [row_to_dict(row) for row in rows]
 
 
 class ReviewRepository:
@@ -485,6 +826,12 @@ class ObservationRepository:
             (crop_path, observation_id),
         )
 
+    def set_classified_path(self, observation_id: int, classified_path: str) -> None:
+        self.db.execute(
+            "UPDATE tiger_observations SET classified_path = ? WHERE observation_id = ?",
+            (classified_path, observation_id),
+        )
+
     def set_identity(
         self,
         observation_id: int,
@@ -504,7 +851,13 @@ class ObservationRepository:
         rows = self.db.fetchall(
             """
             SELECT o.*, d.confidence, d.class_name, d.final_class_name,
-                   i.camera_id, i.original_path, i.filename, i.timestamp AS image_timestamp
+                   d.image_id, d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
+                   i.camera_id, i.original_path, i.filename,
+                   i.timestamp AS image_timestamp,
+                   EXISTS(
+                       SELECT 1 FROM tiger_embeddings e
+                       WHERE e.observation_id = o.observation_id
+                   ) AS embedding_available
             FROM tiger_observations o
             JOIN detections d ON d.detection_id = o.detection_id
             JOIN images i ON i.image_id = d.image_id
@@ -517,8 +870,13 @@ class ObservationRepository:
         rows = self.db.fetchall(
             """
             SELECT o.*, d.confidence, d.class_name, d.final_class_name,
+                   d.image_id, d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
                    i.camera_id, i.original_path, i.filename,
-                   i.timestamp AS image_timestamp
+                   i.timestamp AS image_timestamp,
+                   EXISTS(
+                       SELECT 1 FROM tiger_embeddings e
+                       WHERE e.observation_id = o.observation_id
+                   ) AS embedding_available
             FROM tiger_observations o
             JOIN detections d ON d.detection_id = o.detection_id
             JOIN images i ON i.image_id = d.image_id
@@ -531,8 +889,14 @@ class ObservationRepository:
     def list_for_tiger(self, tiger_id: str) -> list[dict[str, Any]]:
         rows = self.db.fetchall(
             """
-            SELECT o.*, d.confidence, i.camera_id, i.original_path, i.filename,
-                   i.timestamp AS image_timestamp
+            SELECT o.*, d.confidence, d.class_name, d.final_class_name,
+                   d.image_id, d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
+                   i.camera_id, i.original_path, i.filename,
+                   i.timestamp AS image_timestamp,
+                   EXISTS(
+                       SELECT 1 FROM tiger_embeddings e
+                       WHERE e.observation_id = o.observation_id
+                   ) AS embedding_available
             FROM tiger_observations o
             JOIN detections d ON d.detection_id = o.detection_id
             JOIN images i ON i.image_id = d.image_id
@@ -600,7 +964,16 @@ class TigerRepository:
         rows = self.db.fetchall(
             """
             SELECT t.*,
-                   (SELECT COUNT(*) FROM tiger_observations o WHERE o.tiger_id = t.tiger_id) AS observation_count
+                   (SELECT COUNT(*) FROM tiger_observations o WHERE o.tiger_id = t.tiger_id) AS observation_count,
+                   (
+                       SELECT i.camera_id
+                       FROM tiger_observations o
+                       JOIN detections d ON d.detection_id = o.detection_id
+                       JOIN images i ON i.image_id = d.image_id
+                       WHERE o.tiger_id = t.tiger_id
+                       ORDER BY COALESCE(o.timestamp, i.timestamp, o.created_at) DESC
+                       LIMIT 1
+                   ) AS last_camera
             FROM tigers t
             ORDER BY t.tiger_id
             """
@@ -773,6 +1146,200 @@ class SuggestionRepository:
             "UPDATE reid_suggestions SET deferred = 1 WHERE observation_id = ?",
             (observation_id,),
         )
+
+
+class AlertRepository:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def insert(
+        self,
+        *,
+        alert_type: str,
+        severity: str,
+        title: str,
+        explanation: str,
+        event_key: str,
+        animal_class: str | None = None,
+        tiger_id: str | None = None,
+        camera_id: str | None = None,
+        confidence: float | None = None,
+        timestamp: str | None = None,
+        location: str | None = None,
+        source_table: str | None = None,
+        source_id: int | None = None,
+        observation_id: int | None = None,
+        detection_id: int | None = None,
+        image_id: int | None = None,
+        metadata: str | None = None,
+    ) -> int | None:
+        existing = self.get_by_event_key(event_key)
+        if existing is not None:
+            return None
+        return self.db.execute_returning_id(
+            """
+            INSERT INTO alerts(
+                alert_type, severity, title, explanation, animal_class, tiger_id,
+                camera_id, confidence, timestamp, location, event_key, source_table,
+                source_id, observation_id, detection_id, image_id, read, cleared,
+                created_at, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+            """,
+            (
+                alert_type,
+                severity,
+                title,
+                explanation,
+                animal_class,
+                tiger_id,
+                camera_id,
+                confidence,
+                timestamp,
+                location,
+                event_key,
+                source_table,
+                source_id,
+                observation_id,
+                detection_id,
+                image_id,
+                utc_now(),
+                metadata,
+            ),
+        )
+
+    def get(self, alert_id: int) -> dict[str, Any] | None:
+        row = self.db.fetchone("SELECT * FROM alerts WHERE alert_id = ?", (alert_id,))
+        return row_to_dict(row) if row else None
+
+    def get_by_event_key(self, event_key: str) -> dict[str, Any] | None:
+        row = self.db.fetchone("SELECT * FROM alerts WHERE event_key = ?", (event_key,))
+        return row_to_dict(row) if row else None
+
+    def list_filtered(
+        self,
+        *,
+        unread: bool | None = None,
+        cleared: bool = False,
+        alert_type: str | None = None,
+        tiger_id: str | None = None,
+        camera_id: str | None = None,
+        severity: str | None = None,
+        since_id: int | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["cleared = ?"]
+        params: list[Any] = [1 if cleared else 0]
+        if unread is True:
+            clauses.append("read = 0")
+        elif unread is False:
+            clauses.append("read = 1")
+        if alert_type:
+            clauses.append("alert_type = ?")
+            params.append(alert_type)
+        if tiger_id:
+            clauses.append("tiger_id = ?")
+            params.append(tiger_id)
+        if camera_id:
+            clauses.append("camera_id = ?")
+            params.append(camera_id)
+        if severity:
+            clauses.append("severity = ?")
+            params.append(severity)
+        if since_id is not None:
+            clauses.append("alert_id > ?")
+            params.append(since_id)
+        where = " AND ".join(clauses)
+        rows = self.db.fetchall(
+            f"""
+            SELECT * FROM alerts
+            WHERE {where}
+            ORDER BY alert_id DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+        return [row_to_dict(row) for row in rows]
+
+    def summary(self) -> dict[str, Any]:
+        unread_row = self.db.fetchone(
+            "SELECT COUNT(*) AS n FROM alerts WHERE read = 0 AND cleared = 0"
+        )
+        critical_row = self.db.fetchone(
+            """
+            SELECT COUNT(*) AS n FROM alerts
+            WHERE read = 0 AND cleared = 0 AND severity = 'critical'
+            """
+        )
+        recent = self.list_filtered(limit=8)
+        return {
+            "unread": int(unread_row["n"]) if unread_row else 0,
+            "critical": int(critical_row["n"]) if critical_row else 0,
+            "recent": recent,
+        }
+
+    def mark_read(self, alert_id: int) -> dict[str, Any] | None:
+        existing = self.get(alert_id)
+        if existing is None:
+            return None
+        self.db.execute("UPDATE alerts SET read = 1 WHERE alert_id = ?", (alert_id,))
+        return self.get(alert_id)
+
+    def mark_all_read(
+        self,
+        *,
+        alert_type: str | None = None,
+        tiger_id: str | None = None,
+        camera_id: str | None = None,
+    ) -> int:
+        clauses = ["cleared = 0", "read = 0"]
+        params: list[Any] = []
+        if alert_type:
+            clauses.append("alert_type = ?")
+            params.append(alert_type)
+        if tiger_id:
+            clauses.append("tiger_id = ?")
+            params.append(tiger_id)
+        if camera_id:
+            clauses.append("camera_id = ?")
+            params.append(camera_id)
+        where = " AND ".join(clauses)
+        cursor = self.db.execute(f"UPDATE alerts SET read = 1 WHERE {where}", params)
+        return int(cursor.rowcount or 0)
+
+    def clear(self, alert_id: int) -> dict[str, Any] | None:
+        existing = self.get(alert_id)
+        if existing is None:
+            return None
+        self.db.execute(
+            "UPDATE alerts SET cleared = 1, read = 1 WHERE alert_id = ?",
+            (alert_id,),
+        )
+        return self.get(alert_id)
+
+    def clear_filtered(
+        self,
+        *,
+        alert_type: str | None = None,
+        tiger_id: str | None = None,
+        camera_id: str | None = None,
+    ) -> int:
+        clauses = ["cleared = 0"]
+        params: list[Any] = []
+        if alert_type:
+            clauses.append("alert_type = ?")
+            params.append(alert_type)
+        if tiger_id:
+            clauses.append("tiger_id = ?")
+            params.append(tiger_id)
+        if camera_id:
+            clauses.append("camera_id = ?")
+            params.append(camera_id)
+        where = " AND ".join(clauses)
+        cursor = self.db.execute(
+            f"UPDATE alerts SET cleared = 1, read = 1 WHERE {where}",
+            params,
+        )
+        return int(cursor.rowcount or 0)
 
 
 class ErrorRepository:

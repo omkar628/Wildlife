@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, cropUrl, imageUrl, type ReviewItem, type TigerCatalogItem, type UnidentifiedObservation } from '../api'
+import { EmptyPanel, LoadingPanel } from '../ui/Status'
 
 function percent(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return '—'
@@ -24,6 +25,7 @@ export default function ReviewPage() {
   const [nextId, setNextId] = useState('T001')
   const [selectedTiger, setSelectedTiger] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const current = items[0]
   const identityCurrent = unidentified[0]
 
@@ -45,7 +47,9 @@ export default function ReviewPage() {
   }
 
   useEffect(() => {
-    load().catch((err: Error) => setError(err.message))
+    load()
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false))
   }, [])
 
   async function decide(humanClass: string) {
@@ -132,9 +136,13 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      {!current ? (
-        <article className="card"><p className="empty">Class review queue is empty.</p></article>
-      ) : (
+      {loading ? <LoadingPanel title="Loading review queue…" /> : null}
+      {!loading && !current ? (
+        <article className="card">
+          <EmptyPanel title="Class review queue is empty" detail="Uncertain YOLO classes land here. Confident detections are accepted automatically." />
+        </article>
+      ) : null}
+      {!loading && current ? (
         <div className="review-layout">
           <div className="frame">
             <img src={imageUrl(current.image_id)} alt={current.filename} />
@@ -155,7 +163,7 @@ export default function ReviewPage() {
             </div>
           </article>
         </div>
-      )}
+      ) : null}
 
       <article className="card" style={{ marginTop: 16 }}>
         <h3>Tiger identity</h3>

@@ -12,6 +12,7 @@ from backend.reid.adapter import UnavailableReIDAdapter
 from backend.reid.identity import LocalIdentityService
 from backend.reid.megadescriptor import MegaDescriptorEncoder
 from backend.review.service import ReviewService
+from backend.services.alerts import AlertService
 from backend.services.gnn_service import GNNService
 from backend.services.pipeline import PipelineService
 
@@ -61,6 +62,11 @@ def get_identity_service() -> LocalIdentityService:
 @lru_cache(maxsize=1)
 def get_gnn_service() -> GNNService:
     return GNNService(get_settings(), get_database())
+
+
+@lru_cache(maxsize=1)
+def get_alert_service() -> AlertService:
+    return AlertService(get_database(), get_settings())
 
 
 def settings_dep() -> Settings:

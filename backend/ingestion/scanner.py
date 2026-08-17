@@ -32,6 +32,20 @@ def iter_image_files(folder: Path) -> list[Path]:
     return found
 
 
+def match_folder_to_camera(folder_name: str, known_cameras: set[str] | list[str]) -> dict:
+    """Map a folder name to a registered camera ID. Never invent a camera."""
+    suggested = suggest_folder_camera_id(folder_name)
+    known = set(known_cameras)
+    matched = suggested in known
+    return {
+        "folder_name": folder_name,
+        "suggested_camera_id": suggested,
+        "camera_id": suggested if matched else None,
+        "match_status": "matched" if matched else "unknown",
+        "unknown_camera_folder": not matched,
+    }
+
+
 def suggest_folder_camera_id(name: str) -> str:
     cleaned = (name or "").strip()
     if not cleaned:

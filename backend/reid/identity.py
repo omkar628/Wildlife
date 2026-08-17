@@ -313,6 +313,39 @@ class LocalIdentityService:
         self.tigers.upsert_seen(tiger_id, seen_at)
         self.observations.set_identity(int(observation["observation_id"]), tiger_id, similarity)
         self.gallery.attach_to_tiger(int(observation["observation_id"]), tiger_id, crop_path)
+        self._after_identity(int(observation["observation_id"]), tiger_id)
+
+    def _after_identity(self, observation_id: int, tiger_id: str) -> None:
+        """Best-effort classified move + alerts. Identity is already committed."""
+        if self.settings is None:
+            return
+        updated = self.observations.get_joined(observation_id)
+        if updated is None:
+            return
+        try:
+            from backend.services.classified import ClassifiedStore
+
+            ClassifiedStore(self.db, self.settings).relocate_tiger(
+                observation_id=observation_id,
+                tiger_id=tiger_id,
+            )
+        except Exception:
+            logger.exception("Classified relocate failed for observation %s", observation_id)
+        try:
+            from backend.services.alerts import AlertService
+
+            first = updated
+            created = False
+            rows = self.observations.list_for_tiger(tiger_id)
+            if rows:
+                created = min(int(row["observation_id"]) for row in rows) == observation_id
+            AlertService(self.db, self.settings).from_identity(
+                first,
+                tiger_id,
+                created=created,
+            )
+        except Exception:
+            logger.exception("Identity alert failed for observation %s", observation_id)
 
 
 def _detection_is_accepted_tiger(observation: dict[str, Any]) -> bool:

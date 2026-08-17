@@ -52,7 +52,34 @@ export const api = {
   tiger: (tigerId: string) =>
     request<TigerDetail>(`/tigers/${encodeURIComponent(tigerId)}`),
   cameras: () => request<{ cameras: CameraRow[] }>('/cameras'),
-  graph: () => request<GraphPayload>('/graph'),
+  camera: (cameraId: string) =>
+    request<CameraRow>(`/cameras/${encodeURIComponent(cameraId)}`),
+  createCamera: (payload: CameraPayload) =>
+    request<CameraRow>('/cameras', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCamera: (cameraId: string, payload: CameraUpdatePayload) =>
+    request<CameraRow>(`/cameras/${encodeURIComponent(cameraId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  setCameraEnabled: (cameraId: string, enabled: boolean) =>
+    request<CameraRow>(`/cameras/${encodeURIComponent(cameraId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+  deleteCamera: (cameraId: string) =>
+    request<{ ok: boolean; camera_id: string }>(`/cameras/${encodeURIComponent(cameraId)}`, {
+      method: 'DELETE',
+    }),
+  graph: (params?: GraphFilters) => {
+    const query = new URLSearchParams()
+    if (params?.tiger_id) query.set('tiger_id', params.tiger_id)
+    if (params?.animal_class) query.set('animal_class', params.animal_class)
+    if (params?.camera_id) query.set('camera_id', params.camera_id)
+    if (params?.time_from) query.set('time_from', params.time_from)
+    if (params?.time_to) query.set('time_to', params.time_to)
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<GraphPayload>(`/graph${suffix}`)
+  },
   gnnPrediction: (tigerId: string) =>
     request<GnnPrediction>(`/graph/predictions?tiger_id=${encodeURIComponent(tigerId)}`),
   tigerRoute: (tigerId: string) =>
@@ -121,6 +148,8 @@ export type ImportPayload = {
   longitude?: number | null
   elevation?: number | null
   habitat?: string | null
+  create_if_missing?: boolean
+  name?: string | null
 }
 
 export type DiscoveredCameraFolder = {
@@ -130,6 +159,8 @@ export type DiscoveredCameraFolder = {
   image_count: number
   sample_names: string[]
   camera_exists: boolean
+  match_status?: 'matched' | 'unknown'
+  unknown_camera_folder?: boolean
 }
 
 export type ImportPreview = {
@@ -181,6 +212,7 @@ export type Detection = {
   camera_id: string | null
   filename: string
   timestamp: string | null
+  tiger_id?: string | null
   review_status: string
   accepted: number
 }
@@ -218,6 +250,7 @@ export type TigerRow = {
   first_seen: string | null
   last_seen: string | null
   observation_count: number
+  last_camera?: string | null
 }
 
 export type IdentityReference = {
@@ -270,6 +303,25 @@ export type UnidentifiedPayload = {
   next_tiger_id: string
 }
 
+export type ActivityCamera = {
+  camera_id: string
+  observation_count: number
+  intensity: number
+  last_seen?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  missing_coordinates?: boolean
+}
+
+export type ActivityArea = {
+  label: string
+  tiger_id?: string
+  cameras: ActivityCamera[]
+  strongest_camera: string | null
+  strongest_count: number
+  region?: HomeRange & { label?: string }
+}
+
 export type TigerDetail = {
   tiger: TigerRow
   history: Array<{
@@ -280,19 +332,62 @@ export type TigerDetail = {
     detection_id: number
   }>
   references: IdentityReference[]
+  last_camera?: string | null
+  last_seen?: string | null
+  cameras_visited?: string[]
+  observation_count?: number
+  most_frequent_camera?: string | null
+  most_frequent_count?: number
+  activity_area?: ActivityArea
+  current_station?: ObservedStop | null
 }
 
 export type CameraRow = {
   camera_id: string
+  name?: string | null
   latitude: number | null
   longitude: number | null
+  elevation?: number | null
   habitat: string | null
+  metadata?: string | null
+  enabled?: boolean | number
+  status?: string
+  image_count?: number
+  observation_count?: number
+  tiger_count?: number
+  prey_count?: number
+  rival_count?: number
+  human_count?: number
+  missing_coordinates?: boolean
 }
 
-export type OccupancyMode = 'all_species' | 'tiger' | 'selected_tiger'
+export type CameraPayload = {
+  camera_id: string
+  name?: string | null
+  latitude?: number | null
+  longitude?: number | null
+  elevation?: number | null
+  habitat?: string | null
+  enabled?: boolean
+}
+
+export type CameraUpdatePayload = Partial<CameraPayload>
+
+export type GraphFilters = {
+  tiger_id?: string
+  animal_class?: string
+  camera_id?: string
+  time_from?: string
+  time_to?: string
+}
+
+export type OccupancyMode = 'all_species' | 'tiger' | 'prey' | 'rival' | 'human' | 'selected_tiger'
 
 export type OccupancyStation = {
   camera_id: string
+  name?: string | null
+  enabled?: boolean
+  status?: string
   latitude: number | null
   longitude: number | null
   registered: boolean
@@ -301,18 +396,26 @@ export type OccupancyStation = {
   habitat: string | null
   all_species_detections: number
   tiger_captures: number
+  tiger_detections?: number
+  prey_detections?: number
+  rival_detections?: number
+  human_detections?: number
   unique_tigers: number
   selected_tiger_captures: number
   latest_tiger_id: string | null
   latest_tiger_timestamp: string | null
   occupancy_level_all_species: string
   occupancy_level_tiger: string
+  occupancy_level_prey?: string
+  occupancy_level_rival?: string
+  occupancy_level_human?: string
   occupancy_level_selected_tiger: string
   capture_frequency_per_day: number | null
   capture_span_days: number | null
 }
 
 export type OccupancyPayload = {
+  label?: string
   stations: OccupancyStation[]
   supported_modes: OccupancyMode[]
   selected_tiger_id?: string | null
@@ -324,12 +427,41 @@ export type ObservedStop = {
   latitude: number | null
   longitude: number | null
   confidence: number | null
+  reid_confidence?: number | null
   observation_id: number
+  detection_id?: number
+  image_id?: number | null
   tiger_id: string
+  class_name?: string | null
+  crop_path?: string | null
+  filename?: string | null
+  embedding_available?: boolean
+  bbox_x?: number | null
+  bbox_y?: number | null
+  bbox_width?: number | null
+  bbox_height?: number | null
   missing_coordinates: boolean
   registered: boolean
   zone_type: string | null
   habitat: string | null
+}
+
+export type MovementEdge = {
+  source: string
+  target: string
+  tiger_id: string | null
+  weight: number
+  first_timestamp?: string | null
+  last_timestamp?: string | null
+  animal_class?: string | null
+  identity?: string | null
+  distance_km?: number | null
+  confidence?: number | null
+  observation_ids?: number[]
+  detection_ids?: number[]
+  source_observation_id?: number | null
+  destination_observation_id?: number | null
+  kind?: string
 }
 
 export type RankedCandidate = {
@@ -377,10 +509,49 @@ export type TigerRoute = {
   predictions: RoutePredictions
   occupancy: OccupancyPayload
   home_range: HomeRange
+  activity_area?: ActivityArea
   visited_stations: string[]
   observation_count: number
   last_observed_station: string | null
   last_observed_timestamp: string | null
+  most_frequent_camera?: string | null
+  most_frequent_count?: number
+}
+
+export type TigerMapEntity = {
+  tiger_id: string
+  last_camera: string | null
+  last_seen: string | null
+  observation_count: number
+  cameras_visited: string[]
+  most_frequent_camera: string | null
+  most_frequent_count: number
+  latitude: number | null
+  longitude: number | null
+  missing_coordinates: boolean
+  registered: boolean
+  activity_area?: ActivityArea
+}
+
+export type WildlifeClassNode = {
+  animal_class: 'prey' | 'rival' | 'human' | string
+  camera_id: string
+  detection_count: number
+  last_seen: string | null
+  confidence?: number | null
+  detection_id?: number
+  image_id?: number | null
+  latitude: number | null
+  longitude: number | null
+  missing_coordinates: boolean
+  registered: boolean
+}
+
+export type WildlifeEntities = {
+  tigers: TigerMapEntity[]
+  prey: WildlifeClassNode[]
+  rival: WildlifeClassNode[]
+  human: WildlifeClassNode[]
 }
 
 export type GnnStatus = {
@@ -420,11 +591,18 @@ export type GraphPayload = {
   camera_graph: {
     nodes: Array<{
       camera_id: string
+      name?: string | null
       latitude?: number | null
       longitude?: number | null
       habitat?: string | null
       observation_count: number
       image_count: number
+      enabled?: boolean
+      status?: string
+      tiger_count?: number
+      prey_count?: number
+      rival_count?: number
+      human_count?: number
     }>
     edges: Array<{ source: string; target: string; tiger_id: string | null; weight: number }>
   }
@@ -436,6 +614,8 @@ export type GraphPayload = {
       confidence: number | null
     }>
   }
+  movement_edges?: MovementEdge[]
   occupancy?: OccupancyPayload
+  wildlife_entities?: WildlifeEntities
   gnn: GnnStatus
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type ImportPreview, type Job } from '../api'
 import { isDesktopApp, selectCameraFolder } from '../desktop'
+import { LoadingPanel } from '../ui/Status'
 
 type CameraRow = {
   folder_path: string
@@ -13,6 +14,8 @@ type CameraRow = {
   longitude: string
   elevation: string
   habitat: string
+  unknown: boolean
+  createNew: boolean
 }
 
 function jobDone(job: Job): boolean {
@@ -74,18 +77,23 @@ export default function ImportPage() {
       setPreview(result)
       setKnown(result.known_cameras)
       setRows(
-        result.camera_folders.map((item) => ({
-          folder_path: item.folder_path,
-          folder_name: item.folder_name,
-          camera_id: item.suggested_camera_id,
-          image_count: item.image_count,
-          sample_names: item.sample_names,
-          included: true,
-          latitude: '',
-          longitude: '',
-          elevation: '',
-          habitat: '',
-        })),
+        result.camera_folders.map((item) => {
+          const unknown = Boolean(item.unknown_camera_folder) || !item.camera_exists
+          return {
+            folder_path: item.folder_path,
+            folder_name: item.folder_name,
+            camera_id: item.suggested_camera_id,
+            image_count: item.image_count,
+            sample_names: item.sample_names,
+            included: !unknown,
+            latitude: '',
+            longitude: '',
+            elevation: '',
+            habitat: '',
+            unknown,
+            createNew: false,
+          }
+        }),
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -102,16 +110,28 @@ export default function ImportPage() {
   async function startImport() {
     const cameras = rows
       .filter((row) => row.included && row.camera_id.trim())
-      .map((row) => ({
-        folder_path: row.folder_path,
-        camera_id: row.camera_id.trim(),
-        habitat: row.habitat || null,
-        latitude: row.latitude === '' ? null : Number(row.latitude),
-        longitude: row.longitude === '' ? null : Number(row.longitude),
-        elevation: row.elevation === '' ? null : Number(row.elevation),
-      }))
+      .map((row) => {
+        const mapped = known.includes(row.camera_id.trim())
+        return {
+          folder_path: row.folder_path,
+          camera_id: row.camera_id.trim(),
+          name: row.camera_id.trim(),
+          habitat: row.createNew ? (row.habitat || null) : null,
+          latitude: row.createNew && row.latitude !== '' ? Number(row.latitude) : null,
+          longitude: row.createNew && row.longitude !== '' ? Number(row.longitude) : null,
+          elevation: row.createNew && row.elevation !== '' ? Number(row.elevation) : null,
+          create_if_missing: Boolean(row.createNew && !mapped),
+        }
+      })
     if (cameras.length === 0) {
-      setError('Include at least one camera folder and give it a camera ID.')
+      setError('Include at least one camera folder and map it to a registered camera ID.')
+      return
+    }
+    const unmapped = cameras.filter((item) => !known.includes(item.camera_id) && !item.create_if_missing)
+    if (unmapped.length > 0) {
+      setError(
+        `Unknown camera folder: ${unmapped.map((item) => item.camera_id).join(', ')}. Map each folder to an existing camera or create a new camera.`,
+      )
       return
     }
     setBusy(true)
@@ -144,8 +164,9 @@ export default function ImportPage() {
         <div className="field">
           <label>Local camera-trap folder</label>
           <button className="btn" type="button" onClick={onSelectFolder} disabled={picking || scanning}>
-            {picking ? 'Opening folder picker…' : scanning ? 'Scanning images…' : 'Select Camera Trap Folder'}
+            {picking ? 'Opening folder picker…' : scanning ? 'Scanning camera folders…' : 'Select Camera Trap Folder'}
           </button>
+          {scanning ? <LoadingPanel title="Analyzing camera-trap images…" detail="Grouping files by camera folder." /> : null}
           <div className={`path-display ${folder ? 'ready' : ''}`}>
             {folder || 'No folder selected'}
           </div>
@@ -166,8 +187,8 @@ export default function ImportPage() {
         <article className="card" style={{ marginTop: 16 }}>
           <h3>Discovered camera folders</h3>
           <p className="muted">
-            Map each folder to a camera ID. New IDs are created in SQLite. Existing IDs reuse that camera.
-            Selected: {selectedCount} cameras / {selectedImages} images.
+            Folder name is the camera ID. Unknown folders are not imported until you map them to a registered camera or explicitly create one.
+            Coordinates always come from the camera record. Selected: {selectedCount} cameras / {selectedImages} images.
           </p>
           <table className="table">
             <thead>
@@ -175,9 +196,9 @@ export default function ImportPage() {
                 <th>Import</th>
                 <th>Folder</th>
                 <th>Images</th>
-                <th>Camera ID</th>
-                <th>Existing</th>
-                <th>Lat / Lon / Habitat</th>
+                <th>Camera mapping</th>
+                <th>Status</th>
+                <th>New camera fields</th>
               </tr>
             </thead>
             <tbody>
@@ -203,35 +224,57 @@ export default function ImportPage() {
                     <td>
                       <input
                         value={row.camera_id}
-                        onChange={(event) => updateRow(row.folder_path, { camera_id: event.target.value })}
+                        onChange={(event) => updateRow(row.folder_path, {
+                          camera_id: event.target.value,
+                          unknown: !known.includes(event.target.value.trim()),
+                        })}
                         list="known-cameras"
                         placeholder="Camera_01"
                       />
+                      {row.unknown && !exists ? (
+                        <label className="layer-toggle" style={{ paddingBottom: 0, marginTop: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={row.createNew}
+                            onChange={(event) => updateRow(row.folder_path, {
+                              createNew: event.target.checked,
+                              included: event.target.checked || row.included,
+                            })}
+                          />
+                          Create new camera
+                        </label>
+                      ) : null}
                     </td>
                     <td>
                       <span className={`badge ${exists ? 'ok' : 'warn'}`}>
-                        {exists ? 'maps to existing' : 'will create'}
+                        {exists ? 'maps to existing' : 'Unknown camera folder'}
                       </span>
                     </td>
                     <td>
-                      <div className="row-2">
-                        <input
-                          value={row.latitude}
-                          onChange={(event) => updateRow(row.folder_path, { latitude: event.target.value })}
-                          placeholder="lat"
-                        />
-                        <input
-                          value={row.longitude}
-                          onChange={(event) => updateRow(row.folder_path, { longitude: event.target.value })}
-                          placeholder="lon"
-                        />
-                      </div>
-                      <input
-                        style={{ marginTop: 6 }}
-                        value={row.habitat}
-                        onChange={(event) => updateRow(row.folder_path, { habitat: event.target.value })}
-                        placeholder="habitat (optional)"
-                      />
+                      {row.createNew && !exists ? (
+                        <>
+                          <div className="row-2">
+                            <input
+                              value={row.latitude}
+                              onChange={(event) => updateRow(row.folder_path, { latitude: event.target.value })}
+                              placeholder="lat"
+                            />
+                            <input
+                              value={row.longitude}
+                              onChange={(event) => updateRow(row.folder_path, { longitude: event.target.value })}
+                              placeholder="lon"
+                            />
+                          </div>
+                          <input
+                            style={{ marginTop: 6 }}
+                            value={row.habitat}
+                            onChange={(event) => updateRow(row.folder_path, { habitat: event.target.value })}
+                            placeholder="habitat (optional)"
+                          />
+                        </>
+                      ) : (
+                        <span className="muted">Uses registered camera coordinates</span>
+                      )}
                     </td>
                   </tr>
                 )
@@ -268,9 +311,9 @@ export default function ImportPage() {
             </div>
           ))}
           {allDone ? (
-            <p className="ok">Import finished. Opening Human review for unidentified tiger crops…</p>
+            <p className="ok">Import finished. Opening Review for unidentified tiger crops…</p>
           ) : (
-            <p className="muted">YOLO is running locally. Unidentified tiger crops will land on Human review.</p>
+            <LoadingPanel title="Identifying wildlife…" detail="YOLO is running locally. Re-ID runs on accepted tiger crops." />
           )}
         </article>
       )}

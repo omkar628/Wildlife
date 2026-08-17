@@ -34,8 +34,24 @@ def get_tiger(
     if tiger is None:
         raise HTTPException(status_code=404, detail="Tiger not found.")
     history = [event.to_dict() for event in graph.get_tiger_history(tiger_id)]
+    route = graph.build_tiger_route(tiger_id)
+    activity = route.get("activity_area") or {}
+    cameras_visited = route.get("visited_stations") or []
     return {
-        "tiger": tiger,
+        "tiger": {
+            **tiger,
+            "observation_count": route.get("observation_count", len(history)),
+            "last_camera": route.get("last_observed_station"),
+            "last_seen": route.get("last_observed_timestamp") or tiger.get("last_seen"),
+        },
         "history": history,
         "references": identity.gallery.references_for(tiger_id),
+        "last_camera": route.get("last_observed_station"),
+        "last_seen": route.get("last_observed_timestamp") or tiger.get("last_seen"),
+        "cameras_visited": cameras_visited,
+        "observation_count": route.get("observation_count", len(history)),
+        "most_frequent_camera": route.get("most_frequent_camera"),
+        "most_frequent_count": route.get("most_frequent_count") or 0,
+        "activity_area": activity,
+        "current_station": route.get("current_station"),
     }

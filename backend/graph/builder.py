@@ -12,7 +12,11 @@ from collections import defaultdict
 from typing import Any
 
 from backend.database.connection import Database
-from backend.database.repositories import CameraRepository, ObservationRepository
+from backend.database.repositories import (
+    CameraRepository,
+    DetectionRepository,
+    ObservationRepository,
+)
 from backend.graph.types import (
     CameraEdge,
     CameraGraph,
@@ -22,8 +26,12 @@ from backend.graph.types import (
 )
 
 HOME_RANGE_LABEL = "Estimated home range"
+ACTIVITY_AREA_LABEL = "Observed Activity Area"
 NOT_ENOUGH_OBSERVATIONS = "Not enough observations"
 PREDICTION_UNAVAILABLE = "Prediction unavailable — insufficient data."
+OCCUPANCY_LABEL = "Observed activity / occupancy"
+MOVEMENT_CLASSES = ("tiger", "prey", "rival", "human")
+EARTH_RADIUS_KM = 6371.0
 
 _ZONE_ALIASES = {
     "core": "core",
@@ -84,6 +92,49 @@ def _map_zone_text(value: Any) -> str | None:
     return _ZONE_ALIASES.get(value.strip().lower())
 
 
+def haversine_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dphi / 2.0) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    )
+    return EARTH_RADIUS_KM * 2.0 * math.asin(math.sqrt(min(1.0, a)))
+
+
+def camera_distance_km(
+    source: dict[str, Any] | None,
+    target: dict[str, Any] | None,
+) -> float | None:
+    if source is None or target is None:
+        return None
+    start = finite_coord(source.get("latitude"), source.get("longitude"))
+    end = finite_coord(target.get("latitude"), target.get("longitude"))
+    if start is None or end is None:
+        return None
+    return haversine_km(start[0], start[1], end[0], end[1])
+
+
+def _in_time_range(stamp: Any, time_from: str | None, time_to: str | None) -> bool:
+    if not time_from and not time_to:
+        return True
+    text = str(stamp).strip() if stamp is not None else ""
+    if not text:
+        return False
+    if time_from and text < time_from:
+        return False
+    if time_to and text > time_to:
+        return False
+    return True
+
+
 def finite_coord(latitude: Any, longitude: Any) -> tuple[float, float] | None:
     try:
         lat = float(latitude)
@@ -91,6 +142,8 @@ def finite_coord(latitude: Any, longitude: Any) -> tuple[float, float] | None:
     except (TypeError, ValueError):
         return None
     if not (math.isfinite(lat) and math.isfinite(lon)):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
         return None
     return lat, lon
 
@@ -140,10 +193,26 @@ class GraphService:
         self.db = db
         self.cameras = CameraRepository(db)
         self.observations = ObservationRepository(db)
+        self.detections = DetectionRepository(db)
 
-    def build_camera_graph(self) -> CameraGraph:
+    def build_camera_graph(
+        self,
+        tiger_id: str | None = None,
+        animal_class: str | None = None,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> CameraGraph:
         nodes = self._camera_nodes()
-        edges = self._transition_edges()
+        if animal_class and animal_class != "tiger":
+            edges: list[CameraEdge] = []
+        else:
+            edges = self._transition_edges(
+                tiger_id=tiger_id,
+                camera_id=camera_id,
+                time_from=time_from,
+                time_to=time_to,
+            )
         return CameraGraph(nodes=nodes, edges=edges)
 
     def build_tiger_observation_graph(self, tiger_id: str | None = None) -> TigerObservationGraph:
@@ -186,18 +255,53 @@ class GraphService:
                 """
             )
         }
-        return [
-            CameraNode(
-                camera_id=str(camera["camera_id"]),
-                latitude=camera.get("latitude"),
-                longitude=camera.get("longitude"),
-                elevation=camera.get("elevation"),
-                habitat=camera.get("habitat"),
-                observation_count=observation_counts.get(camera["camera_id"], 0),
-                image_count=image_counts.get(camera["camera_id"], 0),
+        class_counts: dict[str, dict[str, int]] = {}
+        for row in self.db.fetchall(
+            """
+            SELECT i.camera_id AS camera_id,
+                   LOWER(COALESCE(d.final_class_name, d.class_name)) AS class_name,
+                   COUNT(*) AS n
+            FROM detections d
+            JOIN images i ON i.image_id = d.image_id
+            WHERE i.camera_id IS NOT NULL
+              AND d.review_status != 'ignored'
+            GROUP BY i.camera_id, LOWER(COALESCE(d.final_class_name, d.class_name))
+            """
+        ):
+            camera_id = str(row["camera_id"])
+            bucket = class_counts.setdefault(
+                camera_id, {"tiger": 0, "prey": 0, "rival": 0, "human": 0}
             )
-            for camera in cameras
-        ]
+            name = str(row["class_name"] or "")
+            if name in bucket:
+                bucket[name] += int(row["n"])
+
+        nodes: list[CameraNode] = []
+        for camera in cameras:
+            camera_id = str(camera["camera_id"])
+            counts = class_counts.get(
+                camera_id, {"tiger": 0, "prey": 0, "rival": 0, "human": 0}
+            )
+            enabled = camera.get("enabled") not in {0, "0", False}
+            nodes.append(
+                CameraNode(
+                    camera_id=camera_id,
+                    name=camera.get("name") or camera_id,
+                    latitude=camera.get("latitude"),
+                    longitude=camera.get("longitude"),
+                    elevation=camera.get("elevation"),
+                    habitat=camera.get("habitat"),
+                    observation_count=observation_counts.get(camera["camera_id"], 0),
+                    image_count=image_counts.get(camera["camera_id"], 0),
+                    enabled=enabled,
+                    status="enabled" if enabled else "disabled",
+                    tiger_count=counts["tiger"],
+                    prey_count=counts["prey"],
+                    rival_count=counts["rival"],
+                    human_count=counts["human"],
+                )
+            )
+        return nodes
 
     def _events(self, tiger_id: str | None = None) -> list[ObservationEvent]:
         if tiger_id:
@@ -206,6 +310,7 @@ class GraphService:
             rows = self.observations.list_all()
         events: list[ObservationEvent] = []
         for row in rows:
+            image_id = row.get("image_id")
             events.append(
                 ObservationEvent(
                     tiger_id=row.get("tiger_id"),
@@ -216,11 +321,25 @@ class GraphService:
                     observation_id=int(row["observation_id"]),
                     class_name=row.get("final_class_name") or row.get("class_name"),
                     crop_path=row.get("crop_path"),
+                    image_id=int(image_id) if image_id is not None else None,
+                    reid_confidence=row.get("reid_confidence"),
+                    embedding_available=bool(row.get("embedding_available")),
+                    bbox_x=row.get("bbox_x"),
+                    bbox_y=row.get("bbox_y"),
+                    bbox_width=row.get("bbox_width"),
+                    bbox_height=row.get("bbox_height"),
+                    filename=row.get("filename"),
                 )
             )
         return events
 
-    def _transition_edges(self, tiger_id: str | None = None) -> list[CameraEdge]:
+    def _transition_edges(
+        self,
+        tiger_id: str | None = None,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> list[CameraEdge]:
         """Consecutive observations of the same identified tiger become edges.
 
         Unidentified observations (tiger_id IS NULL) cannot form movement edges.
@@ -239,8 +358,12 @@ class GraphService:
         for row in rows:
             if not row.get("tiger_id") or not row.get("camera_id"):
                 continue
+            stamp = row.get("timestamp") or row.get("image_timestamp") or row.get("created_at")
+            if not _in_time_range(stamp, time_from, time_to):
+                continue
             grouped[str(row["tiger_id"])].append(row)
 
+        cameras = self.camera_lookup()
         aggregates: dict[tuple[str, str, str], CameraEdge] = {}
         for identity, items in grouped.items():
             items.sort(key=lambda item: item.get("timestamp") or item.get("image_timestamp") or item.get("created_at") or "")
@@ -249,8 +372,17 @@ class GraphService:
                 target = current.get("camera_id")
                 if not source or not target or source == target:
                     continue
+                if camera_id and camera_id not in {source, target}:
+                    continue
                 key = (str(source), str(target), identity)
                 stamp = current.get("timestamp") or current.get("image_timestamp")
+                prev_obs = previous.get("observation_id")
+                curr_obs = current.get("observation_id")
+                prev_det = previous.get("detection_id")
+                curr_det = current.get("detection_id")
+                confidence = current.get("reid_confidence")
+                if confidence is None:
+                    confidence = current.get("confidence")
                 if key not in aggregates:
                     aggregates[key] = CameraEdge(
                         source=str(source),
@@ -259,11 +391,129 @@ class GraphService:
                         weight=1,
                         first_timestamp=stamp,
                         last_timestamp=stamp,
+                        animal_class="tiger",
+                        identity=identity,
+                        distance_km=camera_distance_km(cameras.get(str(source)), cameras.get(str(target))),
+                        confidence=float(confidence) if confidence is not None else None,
+                        observation_ids=[int(x) for x in (prev_obs, curr_obs) if x is not None],
+                        detection_ids=[int(x) for x in (prev_det, curr_det) if x is not None],
+                        source_observation_id=int(prev_obs) if prev_obs is not None else None,
+                        destination_observation_id=int(curr_obs) if curr_obs is not None else None,
+                        kind="observed",
                     )
                 else:
-                    aggregates[key].weight += 1
-                    aggregates[key].last_timestamp = stamp
+                    edge = aggregates[key]
+                    edge.weight += 1
+                    edge.last_timestamp = stamp
+                    if curr_obs is not None:
+                        edge.observation_ids.append(int(curr_obs))
+                    if curr_det is not None:
+                        edge.detection_ids.append(int(curr_det))
+                    if confidence is not None:
+                        edge.confidence = float(confidence)
         return list(aggregates.values())
+
+    def _class_transition_edges(
+        self,
+        animal_class: str,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> list[CameraEdge]:
+        """Class-level chronological edges. Not individual identities except tiger."""
+        class_name = animal_class.strip().lower()
+        if class_name not in MOVEMENT_CLASSES or class_name == "tiger":
+            return []
+        rows = self.detections.list_for_movement(
+            animal_class=class_name,
+            time_from=time_from,
+            time_to=time_to,
+        )
+        if not rows:
+            return []
+        cameras = self.camera_lookup()
+        items = sorted(
+            rows,
+            key=lambda item: (item.get("timestamp") or "", int(item.get("detection_id") or 0)),
+        )
+        aggregates: dict[tuple[str, str, str], CameraEdge] = {}
+        for previous, current in zip(items, items[1:]):
+            source = previous.get("camera_id")
+            target = current.get("camera_id")
+            if not source or not target or source == target:
+                continue
+            if camera_id and camera_id not in {source, target}:
+                continue
+            key = (str(source), str(target), class_name)
+            stamp = current.get("timestamp")
+            prev_det = previous.get("detection_id")
+            curr_det = current.get("detection_id")
+            prev_obs = previous.get("observation_id")
+            curr_obs = current.get("observation_id")
+            confidence = current.get("confidence")
+            if key not in aggregates:
+                aggregates[key] = CameraEdge(
+                    source=str(source),
+                    target=str(target),
+                    tiger_id=None,
+                    weight=1,
+                    first_timestamp=stamp,
+                    last_timestamp=stamp,
+                    animal_class=class_name,
+                    identity=class_name,
+                    distance_km=camera_distance_km(cameras.get(str(source)), cameras.get(str(target))),
+                    confidence=float(confidence) if confidence is not None else None,
+                    observation_ids=[int(x) for x in (prev_obs, curr_obs) if x is not None],
+                    detection_ids=[int(x) for x in (prev_det, curr_det) if x is not None],
+                    source_observation_id=int(prev_obs) if prev_obs is not None else None,
+                    destination_observation_id=int(curr_obs) if curr_obs is not None else None,
+                    kind="observed",
+                )
+            else:
+                edge = aggregates[key]
+                edge.weight += 1
+                edge.last_timestamp = stamp
+                if curr_obs is not None:
+                    edge.observation_ids.append(int(curr_obs))
+                if curr_det is not None:
+                    edge.detection_ids.append(int(curr_det))
+                if confidence is not None:
+                    edge.confidence = float(confidence)
+        return list(aggregates.values())
+
+    def build_movement_edges(
+        self,
+        tiger_id: str | None = None,
+        animal_class: str | None = None,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> list[CameraEdge]:
+        """Observed movement only. Predictions are never stored here."""
+        wanted = (animal_class or "").strip().lower() or None
+        edges: list[CameraEdge] = []
+        if wanted in {None, "tiger"}:
+            edges.extend(
+                self._transition_edges(
+                    tiger_id=tiger_id,
+                    camera_id=camera_id,
+                    time_from=time_from,
+                    time_to=time_to,
+                )
+            )
+        classes = MOVEMENT_CLASSES if wanted is None else (wanted,)
+        for class_name in classes:
+            if class_name == "tiger":
+                continue
+            edges.extend(
+                self._class_transition_edges(
+                    class_name,
+                    camera_id=camera_id,
+                    time_from=time_from,
+                    time_to=time_to,
+                )
+            )
+        return edges
 
     def camera_lookup(self) -> dict[str, dict[str, Any]]:
         return {str(camera["camera_id"]): camera for camera in self.cameras.list_all()}
@@ -307,9 +557,19 @@ class GraphService:
                     "latitude": coords["latitude"],
                     "longitude": coords["longitude"],
                     "confidence": event.confidence,
+                    "reid_confidence": event.reid_confidence,
                     "observation_id": event.observation_id,
                     "detection_id": event.detection_id,
+                    "image_id": event.image_id,
                     "tiger_id": event.tiger_id or tiger_id,
+                    "class_name": event.class_name,
+                    "crop_path": event.crop_path,
+                    "filename": event.filename,
+                    "embedding_available": event.embedding_available,
+                    "bbox_x": event.bbox_x,
+                    "bbox_y": event.bbox_y,
+                    "bbox_width": event.bbox_width,
+                    "bbox_height": event.bbox_height,
                     "missing_coordinates": coords["missing_coordinates"],
                     "registered": coords["registered"],
                     "zone_type": coords["zone_type"],
@@ -318,47 +578,105 @@ class GraphService:
             )
         return route
 
-    def station_occupancy(self, tiger_id: str | None = None) -> dict[str, Any]:
-        """Occupancy from stored detections and tiger observations only."""
+    def station_occupancy(
+        self,
+        tiger_id: str | None = None,
+        animal_class: str | None = None,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Observed activity from stored detections. Not a statistical occupancy model."""
         cameras = self.cameras.list_all()
+        time_clauses = []
+        time_params: list[Any] = []
+        if time_from:
+            time_clauses.append("COALESCE(i.timestamp, d.created_at) >= ?")
+            time_params.append(time_from)
+        if time_to:
+            time_clauses.append("COALESCE(i.timestamp, d.created_at) <= ?")
+            time_params.append(time_to)
+        time_sql = (" AND " + " AND ".join(time_clauses)) if time_clauses else ""
+        camera_sql = " AND i.camera_id = ?" if camera_id else ""
+        camera_params = [camera_id] if camera_id else []
+
         all_species = {
             str(row["camera_id"]): int(row["n"])
             for row in self.db.fetchall(
-                """
+                f"""
                 SELECT i.camera_id AS camera_id, COUNT(*) AS n
                 FROM detections d
                 JOIN images i ON i.image_id = d.image_id
                 WHERE i.camera_id IS NOT NULL
                   AND d.review_status != 'ignored'
+                  {time_sql}{camera_sql}
                 GROUP BY i.camera_id
-                """
+                """,
+                (*time_params, *camera_params),
             )
         }
+        class_counts: dict[str, dict[str, int]] = {}
+        for row in self.db.fetchall(
+            f"""
+            SELECT i.camera_id AS camera_id,
+                   LOWER(COALESCE(d.final_class_name, d.class_name)) AS class_name,
+                   COUNT(*) AS n
+            FROM detections d
+            JOIN images i ON i.image_id = d.image_id
+            WHERE i.camera_id IS NOT NULL
+              AND d.review_status != 'ignored'
+              {time_sql}{camera_sql}
+            GROUP BY i.camera_id, LOWER(COALESCE(d.final_class_name, d.class_name))
+            """,
+            (*time_params, *camera_params),
+        ):
+            cid = str(row["camera_id"])
+            bucket = class_counts.setdefault(
+                cid, {"tiger": 0, "prey": 0, "rival": 0, "human": 0}
+            )
+            name = str(row["class_name"] or "")
+            if name in bucket:
+                bucket[name] += int(row["n"])
+        tiger_obs_time = []
+        tiger_obs_params: list[Any] = []
+        if time_from:
+            tiger_obs_time.append("COALESCE(o.timestamp, i.timestamp, o.created_at) >= ?")
+            tiger_obs_params.append(time_from)
+        if time_to:
+            tiger_obs_time.append("COALESCE(o.timestamp, i.timestamp, o.created_at) <= ?")
+            tiger_obs_params.append(time_to)
+        tiger_time_sql = (" AND " + " AND ".join(tiger_obs_time)) if tiger_obs_time else ""
+        tiger_camera_sql = " AND i.camera_id = ?" if camera_id else ""
+        tiger_camera_params = [camera_id] if camera_id else []
         tiger_captures = {
             str(row["camera_id"]): int(row["n"])
             for row in self.db.fetchall(
-                """
+                f"""
                 SELECT i.camera_id AS camera_id, COUNT(*) AS n
                 FROM tiger_observations o
                 JOIN detections d ON d.detection_id = o.detection_id
                 JOIN images i ON i.image_id = d.image_id
                 WHERE i.camera_id IS NOT NULL
+                  {tiger_time_sql}{tiger_camera_sql}
                 GROUP BY i.camera_id
-                """
+                """,
+                (*tiger_obs_params, *tiger_camera_params),
             )
         }
         unique_tigers = {
             str(row["camera_id"]): int(row["n"])
             for row in self.db.fetchall(
-                """
+                f"""
                 SELECT i.camera_id AS camera_id, COUNT(DISTINCT o.tiger_id) AS n
                 FROM tiger_observations o
                 JOIN detections d ON d.detection_id = o.detection_id
                 JOIN images i ON i.image_id = d.image_id
                 WHERE i.camera_id IS NOT NULL
                   AND o.tiger_id IS NOT NULL
+                  {tiger_time_sql}{tiger_camera_sql}
                 GROUP BY i.camera_id
-                """
+                """,
+                (*tiger_obs_params, *tiger_camera_params),
             )
         }
         selected_captures: dict[str, int] = {}
@@ -366,23 +684,24 @@ class GraphService:
             selected_captures = {
                 str(row["camera_id"]): int(row["n"])
                 for row in self.db.fetchall(
-                    """
+                    f"""
                     SELECT i.camera_id AS camera_id, COUNT(*) AS n
                     FROM tiger_observations o
                     JOIN detections d ON d.detection_id = o.detection_id
                     JOIN images i ON i.image_id = d.image_id
                     WHERE i.camera_id IS NOT NULL
                       AND o.tiger_id = ?
+                      {tiger_time_sql}{tiger_camera_sql}
                     GROUP BY i.camera_id
                     """,
-                    (tiger_id,),
+                    (tiger_id, *tiger_obs_params, *tiger_camera_params),
                 )
             }
 
         latest: dict[str, dict[str, Any]] = {}
         first_last: dict[str, dict[str, Any]] = {}
         for row in self.db.fetchall(
-            """
+            f"""
             SELECT i.camera_id AS camera_id,
                    o.tiger_id AS tiger_id,
                    COALESCE(o.timestamp, i.timestamp, o.created_at) AS ts
@@ -390,16 +709,18 @@ class GraphService:
             JOIN detections d ON d.detection_id = o.detection_id
             JOIN images i ON i.image_id = d.image_id
             WHERE i.camera_id IS NOT NULL
+              {tiger_time_sql}{tiger_camera_sql}
             ORDER BY COALESCE(o.timestamp, i.timestamp, o.created_at)
-            """
+            """,
+            (*tiger_obs_params, *tiger_camera_params),
         ):
-            camera_id = str(row["camera_id"])
+            obs_camera_id = str(row["camera_id"])
             stamp = row["ts"]
-            bucket = first_last.setdefault(camera_id, {"first": stamp, "last": stamp, "count": 0})
+            bucket = first_last.setdefault(obs_camera_id, {"first": stamp, "last": stamp, "count": 0})
             bucket["last"] = stamp
             bucket["count"] += 1
             if row["tiger_id"]:
-                latest[camera_id] = {
+                latest[obs_camera_id] = {
                     "tiger_id": str(row["tiger_id"]),
                     "timestamp": stamp,
                 }
@@ -407,35 +728,52 @@ class GraphService:
         max_all = max(all_species.values(), default=0)
         max_tiger = max(tiger_captures.values(), default=0)
         max_selected = max(selected_captures.values(), default=0)
+        max_prey = max((counts.get("prey", 0) for counts in class_counts.values()), default=0)
+        max_rival = max((counts.get("rival", 0) for counts in class_counts.values()), default=0)
+        max_human = max((counts.get("human", 0) for counts in class_counts.values()), default=0)
 
         stations: list[dict[str, Any]] = []
         for camera in cameras:
-            camera_id = str(camera["camera_id"])
-            coords = self.camera_coord_payload(camera, camera_id)
-            span = first_last.get(camera_id)
+            cid = str(camera["camera_id"])
+            if camera_id and cid != camera_id:
+                continue
+            coords = self.camera_coord_payload(camera, cid)
+            span = first_last.get(cid)
             frequency = None
             span_days = None
             if span and span["first"] and span["last"] and span["count"] > 1:
                 span_days = _timestamp_span_days(span["first"], span["last"])
                 if span_days and span_days > 0:
                     frequency = span["count"] / span_days
+            counts = class_counts.get(cid, {"tiger": 0, "prey": 0, "rival": 0, "human": 0})
+            enabled = camera.get("enabled") not in {0, "0", False}
             stations.append(
                 {
                     **coords,
-                    "all_species_detections": all_species.get(camera_id, 0),
-                    "tiger_captures": tiger_captures.get(camera_id, 0),
-                    "unique_tigers": unique_tigers.get(camera_id, 0),
-                    "selected_tiger_captures": selected_captures.get(camera_id, 0),
-                    "latest_tiger_id": latest.get(camera_id, {}).get("tiger_id"),
-                    "latest_tiger_timestamp": latest.get(camera_id, {}).get("timestamp"),
+                    "name": camera.get("name") or cid,
+                    "enabled": enabled,
+                    "status": "enabled" if enabled else "disabled",
+                    "all_species_detections": all_species.get(cid, 0),
+                    "tiger_captures": tiger_captures.get(cid, 0),
+                    "tiger_detections": counts["tiger"],
+                    "prey_detections": counts["prey"],
+                    "rival_detections": counts["rival"],
+                    "human_detections": counts["human"],
+                    "unique_tigers": unique_tigers.get(cid, 0),
+                    "selected_tiger_captures": selected_captures.get(cid, 0),
+                    "latest_tiger_id": latest.get(cid, {}).get("tiger_id"),
+                    "latest_tiger_timestamp": latest.get(cid, {}).get("timestamp"),
                     "occupancy_level_all_species": occupancy_level(
-                        all_species.get(camera_id, 0), max_all
+                        all_species.get(cid, 0), max_all
                     ),
                     "occupancy_level_tiger": occupancy_level(
-                        tiger_captures.get(camera_id, 0), max_tiger
+                        tiger_captures.get(cid, 0), max_tiger
                     ),
+                    "occupancy_level_prey": occupancy_level(counts["prey"], max_prey),
+                    "occupancy_level_rival": occupancy_level(counts["rival"], max_rival),
+                    "occupancy_level_human": occupancy_level(counts["human"], max_human),
                     "occupancy_level_selected_tiger": occupancy_level(
-                        selected_captures.get(camera_id, 0), max_selected
+                        selected_captures.get(cid, 0), max_selected
                     ),
                     "capture_frequency_per_day": frequency,
                     "capture_span_days": span_days,
@@ -443,9 +781,171 @@ class GraphService:
             )
 
         return {
+            "label": OCCUPANCY_LABEL,
             "stations": stations,
-            "supported_modes": ["all_species", "tiger", "selected_tiger"],
+            "supported_modes": [
+                "all_species",
+                "tiger",
+                "prey",
+                "rival",
+                "human",
+                "selected_tiger",
+            ],
             "selected_tiger_id": tiger_id,
+            "animal_class": animal_class,
+            "camera_id": camera_id,
+            "time_from": time_from,
+            "time_to": time_to,
+        }
+
+    def build_activity_area(
+        self,
+        tiger_id: str,
+        observed_route: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Per-camera observation intensity. Not a territory or home range."""
+        route = observed_route if observed_route is not None else self.build_observed_route(tiger_id)
+        cameras = self.camera_lookup()
+        counts: dict[str, int] = {}
+        last_seen: dict[str, str | None] = {}
+        for stop in route:
+            camera_id = str(stop["camera_id"])
+            counts[camera_id] = counts.get(camera_id, 0) + 1
+            last_seen[camera_id] = stop.get("timestamp")
+        maximum = max(counts.values(), default=0)
+        ranked: list[dict[str, Any]] = []
+        for camera_id, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+            coords = self.camera_coord_payload(cameras.get(camera_id), camera_id)
+            ranked.append(
+                {
+                    "camera_id": camera_id,
+                    "observation_count": count,
+                    "intensity": (count / maximum) if maximum else 0.0,
+                    "last_seen": last_seen.get(camera_id),
+                    "latitude": coords["latitude"],
+                    "longitude": coords["longitude"],
+                    "missing_coordinates": coords["missing_coordinates"],
+                    "registered": coords["registered"],
+                }
+            )
+        strongest = ranked[0] if ranked else None
+        hull = self.estimate_home_range(route)
+        return {
+            "label": ACTIVITY_AREA_LABEL,
+            "tiger_id": tiger_id,
+            "cameras": ranked,
+            "strongest_camera": strongest["camera_id"] if strongest else None,
+            "strongest_count": strongest["observation_count"] if strongest else 0,
+            "region": {
+                "available": hull["available"],
+                "reason": hull["reason"],
+                "label": ACTIVITY_AREA_LABEL,
+                "polygon": hull["polygon"],
+                "point_count": hull["point_count"],
+                "unique_stations": hull["unique_stations"],
+            },
+        }
+
+    def build_wildlife_entities(
+        self,
+        tiger_id: str | None = None,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Individual tigers plus class-level prey/rival/human camera nodes."""
+        cameras = self.camera_lookup()
+        tigers: list[dict[str, Any]] = []
+        wanted = (tiger_id or "").strip() or None
+        for tiger in self.db.fetchall("SELECT tiger_id FROM tigers ORDER BY tiger_id"):
+            identity = str(tiger["tiger_id"])
+            if wanted and identity != wanted:
+                continue
+            full_route = self.build_observed_route(identity)
+            route = full_route
+            if camera_id:
+                route = [stop for stop in route if stop.get("camera_id") == camera_id]
+            if time_from or time_to:
+                route = [
+                    stop
+                    for stop in route
+                    if _in_time_range(stop.get("timestamp"), time_from, time_to)
+                ]
+            last = route[-1] if route else None
+            activity = self.build_activity_area(identity, full_route)
+            last_camera = last["camera_id"] if last else None
+            coords = (
+                self.camera_coord_payload(cameras.get(str(last_camera)), str(last_camera))
+                if last_camera
+                else {
+                    "latitude": None,
+                    "longitude": None,
+                    "missing_coordinates": True,
+                    "registered": False,
+                }
+            )
+            tigers.append(
+                {
+                    "tiger_id": identity,
+                    "last_camera": last_camera,
+                    "last_seen": last["timestamp"] if last else None,
+                    "observation_count": len(full_route),
+                    "cameras_visited": list(
+                        dict.fromkeys(stop["camera_id"] for stop in full_route)
+                    ),
+                    "most_frequent_camera": activity.get("strongest_camera"),
+                    "most_frequent_count": activity.get("strongest_count") or 0,
+                    "latitude": coords.get("latitude"),
+                    "longitude": coords.get("longitude"),
+                    "missing_coordinates": coords.get("missing_coordinates", True),
+                    "registered": coords.get("registered", False),
+                    "activity_area": activity,
+                }
+            )
+
+        class_nodes: dict[str, list[dict[str, Any]]] = {
+            "prey": [],
+            "rival": [],
+            "human": [],
+        }
+        for class_name in class_nodes:
+            rows = self.detections.list_for_movement(
+                animal_class=class_name,
+                camera_id=camera_id,
+                time_from=time_from,
+                time_to=time_to,
+            )
+            grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for row in rows:
+                cid = row.get("camera_id")
+                if not cid:
+                    continue
+                grouped[str(cid)].append(row)
+            for cid, items in grouped.items():
+                items.sort(key=lambda item: item.get("timestamp") or "")
+                latest = items[-1]
+                coords = self.camera_coord_payload(cameras.get(cid), cid)
+                class_nodes[class_name].append(
+                    {
+                        "animal_class": class_name,
+                        "camera_id": cid,
+                        "detection_count": len(items),
+                        "last_seen": latest.get("timestamp"),
+                        "confidence": latest.get("confidence"),
+                        "detection_id": latest.get("detection_id"),
+                        "image_id": latest.get("image_id"),
+                        "latitude": coords["latitude"],
+                        "longitude": coords["longitude"],
+                        "missing_coordinates": coords["missing_coordinates"],
+                        "registered": coords["registered"],
+                    }
+                )
+
+        return {
+            "tigers": tigers,
+            "prey": class_nodes["prey"],
+            "rival": class_nodes["rival"],
+            "human": class_nodes["human"],
         }
 
     def estimate_home_range(self, observed_route: list[dict[str, Any]]) -> dict[str, Any]:
@@ -562,6 +1062,7 @@ class GraphService:
             "reason": PREDICTION_UNAVAILABLE,
             "tiger_id": tiger_id,
         }
+        activity = self.build_activity_area(tiger_id, observed)
         return {
             "tiger_id": tiger_id,
             "observed_route": observed,
@@ -569,20 +1070,63 @@ class GraphService:
             "predictions": self.attach_prediction_coordinates(raw_prediction),
             "occupancy": self.station_occupancy(tiger_id=tiger_id),
             "home_range": self.estimate_home_range(observed),
+            "activity_area": activity,
             "visited_stations": visited,
             "observation_count": len(observed),
             "last_observed_station": current["camera_id"] if current else None,
             "last_observed_timestamp": current["timestamp"] if current else None,
+            "most_frequent_camera": activity.get("strongest_camera"),
+            "most_frequent_count": activity.get("strongest_count") or 0,
         }
 
-    def export_payload(self) -> dict:
+    def export_payload(
+        self,
+        tiger_id: str | None = None,
+        animal_class: str | None = None,
+        camera_id: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+    ) -> dict:
         """Stable JSON the frontend (and later the GNN) can consume."""
-        camera_graph = self.build_camera_graph()
-        observation_graph = self.build_tiger_observation_graph()
+        camera_graph = self.build_camera_graph(
+            tiger_id=tiger_id,
+            animal_class=animal_class,
+            camera_id=camera_id,
+            time_from=time_from,
+            time_to=time_to,
+        )
+        observation_graph = self.build_tiger_observation_graph(tiger_id=tiger_id)
+        movement_edges = self.build_movement_edges(
+            tiger_id=tiger_id,
+            animal_class=animal_class,
+            camera_id=camera_id,
+            time_from=time_from,
+            time_to=time_to,
+        )
         return {
             "camera_graph": camera_graph.to_dict(),
             "observation_graph": observation_graph.to_dict(),
-            "occupancy": self.station_occupancy(),
+            "movement_edges": [edge.to_dict() for edge in movement_edges],
+            "occupancy": self.station_occupancy(
+                tiger_id=tiger_id,
+                animal_class=animal_class,
+                camera_id=camera_id,
+                time_from=time_from,
+                time_to=time_to,
+            ),
+            "wildlife_entities": self.build_wildlife_entities(
+                tiger_id=tiger_id,
+                camera_id=camera_id,
+                time_from=time_from,
+                time_to=time_to,
+            ),
+            "filters": {
+                "tiger_id": tiger_id,
+                "animal_class": animal_class,
+                "camera_id": camera_id,
+                "time_from": time_from,
+                "time_to": time_to,
+            },
             "gnn": {
                 "implemented": True,
                 "expected_input": "identified tiger history + live camera graph",

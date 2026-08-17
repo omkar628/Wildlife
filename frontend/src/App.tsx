@@ -9,16 +9,18 @@ import ReviewPage from './pages/Review'
 import ImagesPage from './pages/Images'
 import TigersPage from './pages/Tigers'
 import GraphPage from './pages/GraphView'
+import CamerasPage from './pages/Cameras'
 
 const ROUTES = [
   { hash: '#/', label: 'Dashboard' },
-  { hash: '#/import', label: 'Camera Trap Import' },
+  { hash: '#/cameras', label: 'Cameras' },
+  { hash: '#/import', label: 'Import' },
   { hash: '#/jobs', label: 'Processing' },
   { hash: '#/detections', label: 'Detections' },
-  { hash: '#/review', label: 'Human review' },
-  { hash: '#/images', label: 'Recent images' },
+  { hash: '#/review', label: 'Review' },
+  { hash: '#/images', label: 'Images' },
   { hash: '#/tigers', label: 'Tigers' },
-  { hash: '#/graph', label: 'Graph' },
+  { hash: '#/graph', label: 'Movement map' },
 ]
 
 export default function App() {
@@ -40,7 +42,7 @@ export default function App() {
         .catch(() => undefined)
     }
     tick()
-    const id = window.setInterval(tick, 4000)
+    const id = window.setInterval(tick, 6000)
     return () => window.clearInterval(id)
   }, [])
 
@@ -89,6 +91,7 @@ export default function App() {
       </aside>
       <main className="main">
         {page === '#/' && <DashboardPage />}
+        {page === '#/cameras' && <CamerasPage />}
         {page === '#/import' && <ImportPage />}
         {page === '#/jobs' && <JobsPage />}
         {page === '#/detections' && <DetectionsPage />}

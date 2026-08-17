@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -26,11 +26,13 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE TABLE IF NOT EXISTS cameras (
     camera_id TEXT PRIMARY KEY,
+    name TEXT,
     latitude REAL,
     longitude REAL,
     elevation REAL,
     habitat TEXT,
     metadata TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
 
@@ -100,6 +102,7 @@ CREATE TABLE IF NOT EXISTS detections (
     accepted INTEGER NOT NULL DEFAULT 0,
     review_status TEXT NOT NULL DEFAULT 'none',
     created_at TEXT NOT NULL,
+    classified_path TEXT,
     FOREIGN KEY (image_id) REFERENCES images(image_id)
 );
 
@@ -112,6 +115,7 @@ CREATE TABLE IF NOT EXISTS tiger_observations (
     human_verified INTEGER NOT NULL DEFAULT 0,
     timestamp TEXT,
     created_at TEXT NOT NULL,
+    classified_path TEXT,
     FOREIGN KEY (detection_id) REFERENCES detections(detection_id),
     FOREIGN KEY (tiger_id) REFERENCES tigers(tiger_id)
 );
@@ -189,13 +193,76 @@ CREATE TABLE IF NOT EXISTS reid_suggestions (
 
 CREATE INDEX IF NOT EXISTS idx_emb_tiger ON tiger_embeddings(tiger_id);
 CREATE INDEX IF NOT EXISTS idx_reid_suggestions_decision ON reid_suggestions(decision);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    title TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    animal_class TEXT,
+    tiger_id TEXT,
+    camera_id TEXT,
+    confidence REAL,
+    timestamp TEXT,
+    location TEXT,
+    event_key TEXT NOT NULL UNIQUE,
+    source_table TEXT,
+    source_id INTEGER,
+    observation_id INTEGER,
+    detection_id INTEGER,
+    image_id INTEGER,
+    read INTEGER NOT NULL DEFAULT 0,
+    cleared INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    metadata TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type);
+CREATE INDEX IF NOT EXISTS idx_alerts_tiger ON alerts(tiger_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_camera ON alerts(camera_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_unread ON alerts(read, cleared, alert_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at);
 """
+
+
+def _existing_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def migrate_schema(connection: sqlite3.Connection) -> None:
+    """Additive upgrades for existing wildlife.db files. Never drop columns."""
+    camera_columns = _existing_columns(connection, "cameras")
+    if camera_columns:
+        if "name" not in camera_columns:
+            connection.execute("ALTER TABLE cameras ADD COLUMN name TEXT")
+        if "enabled" not in camera_columns:
+            connection.execute(
+                "ALTER TABLE cameras ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
+            )
+        connection.execute(
+            "UPDATE cameras SET name = camera_id WHERE name IS NULL OR TRIM(name) = ''"
+        )
+
+    detection_columns = _existing_columns(connection, "detections")
+    if detection_columns and "classified_path" not in detection_columns:
+        connection.execute("ALTER TABLE detections ADD COLUMN classified_path TEXT")
+
+    observation_columns = _existing_columns(connection, "tiger_observations")
+    if observation_columns and "classified_path" not in observation_columns:
+        connection.execute("ALTER TABLE tiger_observations ADD COLUMN classified_path TEXT")
 
 
 def initialize_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(SCHEMA_SQL)
+    migrate_schema(connection)
     connection.execute(
         "INSERT OR IGNORE INTO schema_meta(key, value) VALUES (?, ?)",
         ("version", str(SCHEMA_VERSION)),
+    )
+    connection.execute(
+        "UPDATE schema_meta SET value = ? WHERE key = 'version'",
+        (str(SCHEMA_VERSION),),
     )
     connection.commit()

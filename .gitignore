@@ -56,6 +56,7 @@ htmlcov/
 data/input/
 data/processed/
 data/crops/
+data/classified/
 data/review/
 logs/
 reports/
@@ -64,6 +65,7 @@ reports/
 !data/input/.gitkeep
 !data/processed/.gitkeep
 !data/crops/.gitkeep
+!data/classified/.gitkeep
 !data/review/.gitkeep
 !logs/.gitkeep
 !reports/.gitkeep

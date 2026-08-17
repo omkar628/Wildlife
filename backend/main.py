@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes import (
+    alerts,
     cameras,
     dashboard,
     detections,
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     application.include_router(tigers.router, prefix="/api")
     application.include_router(observations.router, prefix="/api")
     application.include_router(graph.router, prefix="/api")
+    application.include_router(alerts.router, prefix="/api")
     application.include_router(media.router, prefix="/api")
 
     @application.get("/")

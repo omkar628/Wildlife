@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react'
 import { api, imageUrl, type ImageRow } from '../api'
+import { EmptyPanel, LoadingPanel } from '../ui/Status'
 
 export default function ImagesPage() {
   const [items, setItems] = useState<ImageRow[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.images().then((body) => setItems(body.images))
+    api.images()
+      .then((body) => setItems(body.images))
+      .finally(() => setLoading(false))
   }, [])
 
   return (
@@ -16,9 +20,13 @@ export default function ImagesPage() {
           <p>Processed files with detection counts. Source images are only read, never rewritten.</p>
         </div>
       </div>
-      {items.length === 0 ? (
-        <article className="card"><p className="empty">No images imported yet.</p></article>
-      ) : (
+      {loading ? <LoadingPanel title="Loading camera-trap images…" /> : null}
+      {!loading && items.length === 0 ? (
+        <article className="card">
+          <EmptyPanel title="No images imported yet" detail="Select a camera-trap folder to begin analysis." />
+        </article>
+      ) : null}
+      {!loading && items.length > 0 ? (
         <div className="thumb-grid">
           {items.map((item) => (
             <article className="thumb" key={item.image_id}>
@@ -31,7 +39,7 @@ export default function ImagesPage() {
             </article>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

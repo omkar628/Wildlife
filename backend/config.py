@@ -143,8 +143,12 @@ class Settings(BaseSettings):
 
     database_path: Path = Path("database/wildlife.db")
     crops_dir: Path = Path("data/crops")
+    classified_dir: Path = Path("data/classified")
     logs_dir: Path = Path("logs")
     reports_dir: Path = Path("reports")
+
+    alert_repeat_threshold: int = Field(default=3, ge=2, le=100)
+    alert_unusual_min_detections: int = Field(default=4, ge=2, le=100)
 
     crop_padding: float = Field(default=0.05, ge=0.0, le=0.5)
     crop_jpeg_quality: int = Field(default=95, ge=50, le=100)
@@ -213,8 +217,20 @@ class Settings(BaseSettings):
             PROJECT_ROOT / "database" / "wildlife.db",
         )
         self.crops_dir = _resolve_path(self.crops_dir, PROJECT_ROOT / "data" / "crops")
+        self.classified_dir = _resolve_path(
+            self.classified_dir, PROJECT_ROOT / "data" / "classified"
+        )
         self.logs_dir = _resolve_path(self.logs_dir, PROJECT_ROOT / "logs")
         self.reports_dir = _resolve_path(self.reports_dir, PROJECT_ROOT / "reports")
+
+        if "WI_ALERT_REPEAT_THRESHOLD" not in os.environ:
+            value = _yaml_get(yaml_data, "alerts", "repeat_threshold")
+            if value is not None:
+                self.alert_repeat_threshold = int(value)
+        if "WI_ALERT_UNUSUAL_MIN_DETECTIONS" not in os.environ:
+            value = _yaml_get(yaml_data, "alerts", "unusual_min_detections")
+            if value is not None:
+                self.alert_unusual_min_detections = int(value)
 
         if self.detector_model_path is None or str(self.detector_model_path).strip() == "":
             self.detector_model_path = discover_detector_model()
@@ -287,6 +303,7 @@ class Settings(BaseSettings):
         for path in (
             self.database_path.parent,
             self.crops_dir,
+            self.classified_dir,
             self.logs_dir,
             self.reports_dir,
             PROJECT_ROOT / "data" / "input",

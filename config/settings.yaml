@@ -50,9 +50,16 @@ gnn:
   # auto | cpu | cuda | cuda:0
   device: auto
 
+alerts:
+  # Same identified tiger at the same camera this many times.
+  repeat_threshold: 3
+  # Minimum accepted detections at one camera before unusual-activity is considered.
+  unusual_min_detections: 4
+
 paths:
   database: database/wildlife.db
   crops: data/crops
+  classified: data/classified
   logs: logs
   reports: reports
 

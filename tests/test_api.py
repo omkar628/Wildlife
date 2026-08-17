@@ -37,6 +37,12 @@ class ApiClient:
     def put(self, url: str, **kwargs) -> httpx.Response:
         return self.request("PUT", url, **kwargs)
 
+    def patch(self, url: str, **kwargs) -> httpx.Response:
+        return self.request("PATCH", url, **kwargs)
+
+    def delete(self, url: str, **kwargs) -> httpx.Response:
+        return self.request("DELETE", url, **kwargs)
+
 
 def _client(tmp_settings) -> ApiClient:
     app = create_app()
@@ -84,7 +90,7 @@ def test_import_requires_existing_folder(tmp_settings, tmp_path):
     client = _client(tmp_settings)
     response = client.post(
         "/api/import",
-        json={"folder_path": str(tmp_path / "missing"), "camera_id": "C01"},
+        json={"folder_path": str(tmp_path / "missing"), "camera_id": "C01", "create_if_missing": True},
     )
     assert response.status_code == 400
 
@@ -95,7 +101,7 @@ def test_import_and_job_status(tmp_settings, tmp_path):
     client = _client(tmp_settings)
     response = client.post(
         "/api/import",
-        json={"folder_path": str(folder), "camera_id": "C01", "habitat": "teak"},
+        json={"folder_path": str(folder), "camera_id": "C01", "habitat": "teak", "create_if_missing": True},
     )
     assert response.status_code == 200
     job_id = response.json()["job_id"]
@@ -142,6 +148,8 @@ def test_import_preview_discovers_camera_folders(tmp_settings, tmp_path):
     names = [item["folder_name"] for item in body["camera_folders"]]
     assert names == ["Camera_01", "Camera_02"]
     assert body["camera_folders"][0]["camera_exists"] is False
+    assert body["camera_folders"][0]["unknown_camera_folder"] is True
+    assert body["camera_folders"][0]["match_status"] == "unknown"
 
 
 def test_import_batch_starts_one_job_per_camera(tmp_settings, tmp_path):
@@ -153,8 +161,8 @@ def test_import_batch_starts_one_job_per_camera(tmp_settings, tmp_path):
         "/api/import/batch",
         json={
             "cameras": [
-                {"folder_path": str(root / "Camera_01"), "camera_id": "C01"},
-                {"folder_path": str(root / "Camera_02"), "camera_id": "C02"},
+                {"folder_path": str(root / "Camera_01"), "camera_id": "C01", "create_if_missing": True},
+                {"folder_path": str(root / "Camera_02"), "camera_id": "C02", "create_if_missing": True},
             ]
         },
     )

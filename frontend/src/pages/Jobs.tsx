@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Job, type JobError } from '../api'
+import { EmptyPanel, LoadingPanel } from '../ui/Status'
 
 function selectedJobId(): number | null {
   const query = window.location.hash.split('?')[1] ?? ''
@@ -49,7 +50,7 @@ export default function JobsPage() {
       <div className="grid two">
         <article className="card">
           <h3>Jobs</h3>
-          {jobs.length === 0 ? <p className="empty">No jobs yet.</p> : (
+          {jobs.length === 0 ? <EmptyPanel title="No processing jobs yet" detail="Import a camera folder to start YOLO." /> : (
             <table className="table">
               <thead>
                 <tr><th>ID</th><th>Camera</th><th>Status</th><th>Progress</th></tr>
@@ -69,7 +70,10 @@ export default function JobsPage() {
         </article>
         <article className="card">
           <h3>Summary</h3>
-          {!job ? <p className="empty">Select a job.</p> : (
+          {!job ? <p className="muted">Select a job to watch image processing.</p> : job.status === 'running' ? (
+            <LoadingPanel title="Analyzing camera-trap images…" detail={`${job.processed}/${job.total_images} processed`} />
+          ) : null}
+          {job ? (
             <>
               <p className="muted">{job.folder_path}</p>
               <div className="progress" style={{ margin: '12px 0 16px' }}>
@@ -101,7 +105,7 @@ export default function JobsPage() {
                 </div>
               )}
             </>
-          )}
+          ) : null}
         </article>
       </div>
     </div>

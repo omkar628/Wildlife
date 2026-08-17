@@ -28,6 +28,8 @@ from backend.detector.service import DetectorService
 from backend.ingestion.hasher import hash_file
 from backend.ingestion.metadata import extract_image_metadata
 from backend.ingestion.scanner import iter_image_files
+from backend.services.alerts import AlertService
+from backend.services.classified import ClassifiedStore
 from backend.services.confidence import filter_detection
 from backend.services.crops import crop_destination, save_tiger_crop
 
@@ -53,6 +55,8 @@ class PipelineService:
         self.observations = ObservationRepository(db)
         self.cameras = CameraRepository(db)
         self.errors = ErrorRepository(db)
+        self.classified = ClassifiedStore(db, settings)
+        self.alerts = AlertService(db, settings)
         self._threads: dict[int, threading.Thread] = {}
         self._cancel = set[int]()
         self._lock = threading.Lock()
@@ -65,6 +69,8 @@ class PipelineService:
         longitude: float | None = None,
         elevation: float | None = None,
         habitat: str | None = None,
+        create_if_missing: bool = False,
+        name: str | None = None,
     ) -> dict:
         folder = Path(folder_path)
         if not folder.exists():
@@ -76,13 +82,21 @@ class PipelineService:
         if not camera_id:
             raise ValueError("camera_id is required.")
 
-        self.cameras.upsert(
-            camera_id,
-            latitude=latitude,
-            longitude=longitude,
-            elevation=elevation,
-            habitat=habitat,
-        )
+        existing = self.cameras.get(camera_id)
+        if existing is None:
+            if not create_if_missing:
+                raise ValueError(
+                    f"Unknown camera folder: '{camera_id}' is not a registered camera. "
+                    "Map the folder to an existing camera or create a new camera first."
+                )
+            self.cameras.create(
+                camera_id,
+                name=name or camera_id,
+                latitude=latitude,
+                longitude=longitude,
+                elevation=elevation,
+                habitat=habitat,
+            )
         job_id = self.jobs.create(
             folder_path=str(folder.resolve()),
             camera_id=camera_id,
@@ -145,6 +159,7 @@ class PipelineService:
                 error_message=f"elapsed_seconds={elapsed:.2f}",
             )
             logger.info("Job %s completed in %.2fs", job_id, elapsed)
+            self._emit_job_alerts()
         except Exception as exc:
             logger.exception("Job %s failed", job_id)
             self.jobs.update(
@@ -248,8 +263,11 @@ class PipelineService:
     ) -> None:
         image = self.images.get(image_id)
         timestamp = image.get("timestamp") if image else None
+        camera_id = image.get("camera_id") if image else None
+        original_path = image.get("original_path") if image else str(path)
         auto_accept = self.settings.confidence_auto_accept
         detect_min = self.settings.confidence_detect_min
+        kept = 0
 
         for detection in detections:
             decision = filter_detection(
@@ -300,6 +318,19 @@ class PipelineService:
             if increment:
                 self.jobs.increment(job_id, **increment)
 
+            if decision.keep:
+                kept += 1
+            if decision.accepted and detection.class_name != "tiger":
+                self._archive_and_alert(
+                    class_name=detection.class_name,
+                    camera_id=camera_id,
+                    timestamp=timestamp,
+                    detection_id=detection_id,
+                    original_path=original_path,
+                    image_id=image_id,
+                    confidence=detection.confidence,
+                )
+
             is_tiger = detection.class_name == "tiger" and (
                 decision.accepted or decision.needs_review
             )
@@ -321,6 +352,83 @@ class PipelineService:
                     human_verified=False,
                 )
                 self._identify_observation(observation_id)
+                if decision.accepted:
+                    identified = self.observations.get(observation_id)
+                    tiger_id = identified.get("tiger_id") if identified else None
+                    self._archive_and_alert(
+                        class_name="tiger",
+                        camera_id=camera_id,
+                        timestamp=timestamp,
+                        detection_id=detection_id,
+                        original_path=original_path,
+                        image_id=image_id,
+                        confidence=detection.confidence,
+                        observation_id=observation_id,
+                        tiger_id=tiger_id,
+                    )
+
+        if kept == 0:
+            try:
+                self.classified.store_blank(
+                    source_path=original_path,
+                    camera_id=camera_id,
+                    timestamp=timestamp,
+                    image_id=image_id,
+                )
+            except Exception:
+                logger.exception("Blank classified copy failed for image %s", image_id)
+
+    def _archive_and_alert(
+        self,
+        *,
+        class_name: str,
+        camera_id: str | None,
+        timestamp: str | None,
+        detection_id: int,
+        original_path: str | None,
+        image_id: int | None,
+        confidence: float,
+        observation_id: int | None = None,
+        tiger_id: str | None = None,
+    ) -> None:
+        if original_path:
+            try:
+                self.classified.store_detection(
+                    source_path=original_path,
+                    class_name=class_name,
+                    camera_id=camera_id,
+                    timestamp=timestamp,
+                    detection_id=detection_id,
+                    observation_id=observation_id,
+                    tiger_id=tiger_id,
+                    image_id=image_id,
+                )
+            except Exception:
+                logger.exception("Classified copy failed for detection %s", detection_id)
+        try:
+            self.alerts.from_detection(
+                {
+                    "detection_id": detection_id,
+                    "accepted": 1,
+                    "final_class_name": class_name,
+                    "class_name": class_name,
+                    "confidence": confidence,
+                    "camera_id": camera_id,
+                    "timestamp": timestamp,
+                    "observation_id": observation_id,
+                    "image_id": image_id,
+                    "tiger_id": tiger_id,
+                },
+                tiger_id=tiger_id,
+            )
+        except Exception:
+            logger.exception("Alert emit failed for detection %s", detection_id)
+
+    def _emit_job_alerts(self) -> None:
+        try:
+            self.alerts.after_job(None)
+        except Exception:
+            logger.exception("Post-job alert sync failed")
 
     def _identify_observation(self, observation_id: int) -> None:
         """Best-effort Re-ID. Failures leave the observation unidentified."""

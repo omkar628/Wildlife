@@ -14,6 +14,8 @@ class ImportRequest(BaseModel):
     longitude: float | None = None
     elevation: float | None = None
     habitat: str | None = None
+    create_if_missing: bool = False
+    name: str | None = None
 
 
 class ImportPreviewRequest(BaseModel):
@@ -40,8 +42,46 @@ class SettingsUpdateRequest(BaseModel):
 
 class CameraUpsertRequest(BaseModel):
     camera_id: str
+    name: str | None = None
     latitude: float | None = None
     longitude: float | None = None
     elevation: float | None = None
     habitat: str | None = None
     metadata: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class CameraCreateRequest(BaseModel):
+    camera_id: str = Field(..., min_length=1, max_length=64)
+    name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    elevation: float | None = None
+    habitat: str | None = None
+    metadata: dict[str, Any] | None = None
+    enabled: bool = True
+
+
+class CameraUpdateRequest(BaseModel):
+    camera_id: str | None = None
+    name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    elevation: float | None = None
+    habitat: str | None = None
+    metadata: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class CameraEnabledRequest(BaseModel):
+    enabled: bool
+
+
+class AlertFilterRequest(BaseModel):
+    alert_type: str | None = None
+    tiger_id: str | None = None
+    camera_id: str | None = None
+
+
+class AlertSyncRequest(BaseModel):
+    include_gnn: bool = False

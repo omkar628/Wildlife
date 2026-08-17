@@ -79,6 +79,7 @@ class ReviewService:
             self._ensure_tiger_observation(detection)
         else:
             self._retract_tiger_observation(int(review["detection_id"]))
+            self._archive_accepted(detection, choice)
 
         updated = self.reviews.get(review_id)
         assert updated is not None
@@ -94,6 +95,7 @@ class ReviewService:
             observation_id = int(existing["observation_id"])
             self.observations.mark_human_verified(observation_id, True)
             self._run_identity(observation_id)
+            self._archive_accepted(detection, "tiger")
             return
         parsed = ParsedDetection(
             class_id=int(detection["class_id"]),
@@ -131,6 +133,41 @@ class ReviewService:
             human_verified=True,
         )
         self._run_identity(observation_id)
+        self._archive_accepted(detection, "tiger")
+
+    def _archive_accepted(self, detection: dict, class_name: str) -> None:
+        try:
+            from backend.services.alerts import AlertService
+            from backend.services.classified import ClassifiedStore
+
+            observation = self.observations.get_by_detection(int(detection["detection_id"]))
+            tiger_id = observation.get("tiger_id") if observation else None
+            ClassifiedStore(self.db, self.settings).store_detection(
+                source_path=detection.get("original_path"),
+                class_name=class_name,
+                camera_id=detection.get("camera_id"),
+                timestamp=detection.get("timestamp"),
+                detection_id=int(detection["detection_id"]),
+                observation_id=int(observation["observation_id"]) if observation else None,
+                tiger_id=tiger_id,
+                image_id=detection.get("image_id"),
+            )
+            AlertService(self.db, self.settings).from_detection(
+                {
+                    **detection,
+                    "accepted": 1,
+                    "final_class_name": class_name,
+                    "class_name": class_name,
+                    "observation_id": observation.get("observation_id") if observation else None,
+                    "tiger_id": tiger_id,
+                },
+                tiger_id=tiger_id,
+            )
+        except Exception:
+            logger.exception(
+                "Review archive/alert failed for detection %s",
+                detection.get("detection_id"),
+            )
 
     def _run_identity(self, observation_id: int) -> None:
         if self.identity is None:

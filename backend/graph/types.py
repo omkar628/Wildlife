@@ -21,6 +21,14 @@ class ObservationEvent:
     observation_id: int
     class_name: str | None = None
     crop_path: str | None = None
+    image_id: int | None = None
+    reid_confidence: float | None = None
+    embedding_available: bool = False
+    bbox_x: float | None = None
+    bbox_y: float | None = None
+    bbox_width: float | None = None
+    bbox_height: float | None = None
+    filename: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -35,6 +43,13 @@ class CameraNode:
     habitat: str | None
     observation_count: int
     image_count: int
+    name: str | None = None
+    enabled: bool = True
+    status: str = "enabled"
+    tiger_count: int = 0
+    prey_count: int = 0
+    rival_count: int = 0
+    human_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +63,15 @@ class CameraEdge:
     weight: int
     first_timestamp: str | None = None
     last_timestamp: str | None = None
+    animal_class: str | None = None
+    identity: str | None = None
+    distance_km: float | None = None
+    confidence: float | None = None
+    observation_ids: list[int] = field(default_factory=list)
+    detection_ids: list[int] = field(default_factory=list)
+    source_observation_id: int | None = None
+    destination_observation_id: int | None = None
+    kind: str = "observed"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -192,7 +192,15 @@ def test_occupancy_from_actual_observations(db):
     assert by_id["C03"]["tiger_captures"] == 0
     assert by_id["C03"]["all_species_detections"] == 0
     assert by_id["C03"]["occupancy_level_tiger"] == "none"
-    assert occupancy["supported_modes"] == ["all_species", "tiger", "selected_tiger"]
+    assert occupancy["supported_modes"] == [
+        "all_species",
+        "tiger",
+        "prey",
+        "rival",
+        "human",
+        "selected_tiger",
+    ]
+    assert occupancy["label"] == "Observed activity / occupancy"
 
 
 def test_home_range_requires_three_unique_registered_coordinates(db):

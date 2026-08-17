@@ -6,7 +6,7 @@ from backend.api.deps import db_dep, get_pipeline
 from backend.api.schemas import BatchImportRequest, ImportPreviewRequest, ImportRequest
 from backend.database.connection import Database
 from backend.database.repositories import CameraRepository, ErrorRepository, JobRepository
-from backend.ingestion.scanner import discover_camera_folders
+from backend.ingestion.scanner import discover_camera_folders, match_folder_to_camera
 from backend.services.pipeline import PipelineService
 
 router = APIRouter(tags=["jobs"])
@@ -24,11 +24,14 @@ def preview_import(
     known = {row["camera_id"] for row in CameraRepository(db).list_all()}
     folders = []
     for item in preview["camera_folders"]:
-        suggested = item["suggested_camera_id"]
+        match = match_folder_to_camera(item["folder_name"], known)
         folders.append(
             {
                 **item,
-                "camera_exists": suggested in known,
+                "suggested_camera_id": match["suggested_camera_id"],
+                "camera_exists": not match["unknown_camera_folder"],
+                "match_status": match["match_status"],
+                "unknown_camera_folder": match["unknown_camera_folder"],
             }
         )
     preview["camera_folders"] = folders
@@ -52,6 +55,8 @@ def start_batch_import(
                     longitude=item.longitude,
                     elevation=item.elevation,
                     habitat=item.habitat,
+                    create_if_missing=item.create_if_missing,
+                    name=item.name,
                 )
             )
         except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
@@ -72,6 +77,8 @@ def start_import(
             longitude=payload.longitude,
             elevation=payload.elevation,
             habitat=payload.habitat,
+            create_if_missing=payload.create_if_missing,
+            name=payload.name,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

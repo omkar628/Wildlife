@@ -49,6 +49,25 @@ def gnn_predictions(
     return gnn.predict_for_tiger(tiger_id)
 
 
+@router.get("/tigers/{tiger_id}/route")
+def tiger_route(
+    tiger_id: str,
+    graph: GraphService = Depends(get_graph_service),
+    gnn: GNNService = Depends(get_gnn_service),
+) -> dict:
+    """Observed route from SQLite plus next-station ranking from the existing GNN."""
+    try:
+        prediction = gnn.predict_for_tiger(tiger_id)
+    except Exception as exc:
+        prediction = {
+            "available": False,
+            "reason": "Prediction unavailable — insufficient data.",
+            "detail": str(exc),
+            "tiger_id": tiger_id,
+        }
+    return graph.build_tiger_route(tiger_id, prediction)
+
+
 @router.get("/reid-status")
 def reid_status(reid: UnavailableReIDAdapter = Depends(get_reid_adapter)) -> dict:
     return reid.status()

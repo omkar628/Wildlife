@@ -29,6 +29,10 @@ class ReIDResult:
     confidence: float | None
     matches: list[ReIDMatch] = field(default_factory=list)
     reason: str = ""
+    matched: bool = False
+    needs_review: bool = True
+    decision: str = ""
+    suggested_tiger_id: str | None = None
 
 
 @runtime_checkable

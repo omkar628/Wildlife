@@ -7,12 +7,14 @@ from backend.api.deps import (
     get_gnn_service,
     get_identity_service,
     get_reid_adapter,
+    get_reid_encoder,
     settings_dep,
 )
 from backend.config import Settings
 from backend.detector.service import DetectorService
 from backend.reid.adapter import UnavailableReIDAdapter
 from backend.reid.identity import LocalIdentityService
+from backend.reid.megadescriptor import MegaDescriptorEncoder
 from backend.services.gnn_service import GNNService
 
 router = APIRouter(tags=["health"])
@@ -35,11 +37,18 @@ def health(
     settings: Settings = Depends(settings_dep),
     detector: DetectorService = Depends(get_detector),
     reid: UnavailableReIDAdapter = Depends(get_reid_adapter),
+    encoder: MegaDescriptorEncoder = Depends(get_reid_encoder),
     identity: LocalIdentityService = Depends(get_identity_service),
     gnn: GNNService = Depends(get_gnn_service),
 ) -> dict:
-    reid_status = reid.status()
-    reid_status["local_identity"] = identity.status()
+    encoder_status = encoder.status()
+    reid_status = {
+        **encoder_status,
+        "atrw_assets": reid.status(),
+        "local_identity": identity.status(),
+        "match_threshold": settings.reid_match_threshold,
+        "review_threshold": settings.reid_review_threshold,
+    }
     return {
         "status": "ok",
         "offline": True,

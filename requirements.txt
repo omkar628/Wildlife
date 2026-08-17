@@ -18,8 +18,9 @@ numpy>=1.24.0
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 ultralytics>=8.3.0
 
-# Future Re-ID gallery search (not used until inference code is provided)
-# faiss-cpu>=1.8.0
+# MegaDescriptor-S-224 (timm loads BVRA/MegaDescriptor-S-224 from Hugging Face)
+timm>=1.0.0
+# huggingface_hub is pulled in by timm for hf-hub: sources.
 
 # Tests
 pytest>=8.0.0

@@ -53,7 +53,9 @@ def test_health_endpoint(tmp_settings):
     assert body["status"] == "ok"
     assert body["offline"] is True
     assert "detector" in body
-    assert body["reid"]["implemented"] is False
+    assert "reid" in body
+    assert body["reid"]["uses_atrw_gallery"] is False
+    assert body["reid"]["local_identity"]["assigns_atrw_ids"] is False
     assert "gnn" in body
     assert "loaded" in body["gnn"]
     assert "device" in body["gnn"]

@@ -28,6 +28,24 @@ crops:
   padding: 0.05
   jpeg_quality: 95
 
+reid:
+  enabled: true
+  # Hugging Face id. Downloaded once into the local HF cache; not re-fetched per image.
+  model_id: BVRA/MegaDescriptor-S-224
+  # Optional timm source override (local path or hf-hub:...). Leave empty to use model_id.
+  model_path: ""
+  # auto | cpu | cuda | cuda:0
+  device: auto
+  # Provisional auto-assign cosine. NOT the ATRW "0.7" rule.
+  # ATRW different-individual cosine reached 0.70 while same-individual
+  # cosine dipped to 0.32, so 0.70 is not a safe production cutoff.
+  # 0.90 is a conservative field default: uncertain matches go to review.
+  match_threshold: 0.90
+  # Below this, do not even suggest a local ID. Still stays unidentified.
+  review_threshold: 0.55
+  # Auto-assign only if top-1 beats top-2 by at least this cosine gap.
+  min_margin: 0.05
+
 gnn:
   # auto | cpu | cuda | cuda:0
   device: auto

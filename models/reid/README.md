@@ -9,6 +9,7 @@ Expected files:
 These currently live at the **project root** and must not be moved or modified
 by the application.
 
-The app discovers them automatically. Re-ID inference is **not implemented**
-because the original model class and preprocessing code are not in this repo.
-See the README section “Tiger Re-ID status”.
+The app discovers them automatically. They are inspected only.
+
+Production identity uses **MegaDescriptor-S-224** and local T001+ IDs.
+The ATRW ArcFace/FAISS gallery is never assigned to field tigers.

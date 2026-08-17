@@ -1,9 +1,11 @@
-# Future GNN
+# GNN weights
 
-This directory is intentionally empty.
+Place `gnn_model_v3_optimized_best.pt` here (or leave it at the project root).
+The app auto-discovers either location.
 
-When the GNN is ready, place it here (for example `models/gnn/`) and wire it
-to `backend.graph.builder.GraphService`. Do not change:
+Runtime inference lives in `backend/services/gnn_service.py` using the
+V3.1 `DistanceAwareGNN` copy in `backend/services/gnn_architecture.py`.
+Do not change:
 
 - YOLO detector
 - image ingestion

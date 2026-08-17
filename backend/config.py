@@ -130,6 +130,13 @@ class Settings(BaseSettings):
     reid_weights_path: Path | None = None
     reid_index_path: Path | None = None
     reid_metadata_path: Path | None = None
+    reid_enabled: bool = True
+    reid_model_id: str = "BVRA/MegaDescriptor-S-224"
+    reid_model_path: str | None = None
+    reid_device: str = "auto"
+    reid_match_threshold: float = Field(default=0.90, ge=0.0, le=1.0)
+    reid_review_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
+    reid_min_margin: float = Field(default=0.05, ge=0.0, le=1.0)
 
     gnn_weights_path: Path | None = None
     gnn_device: str = "auto"
@@ -234,6 +241,35 @@ class Settings(BaseSettings):
             self.reid_metadata_path = _resolve_path(
                 self.reid_metadata_path, discover_reid_metadata()
             )
+
+        if "WI_REID_ENABLED" not in os.environ:
+            value = _yaml_get(yaml_data, "reid", "enabled")
+            if value is not None:
+                self.reid_enabled = bool(value)
+        if "WI_REID_MODEL_ID" not in os.environ:
+            value = _yaml_get(yaml_data, "reid", "model_id")
+            if value is not None:
+                self.reid_model_id = str(value)
+        if "WI_REID_MODEL_PATH" not in os.environ:
+            value = _yaml_get(yaml_data, "reid", "model_path")
+            if value:
+                self.reid_model_path = str(value)
+        if "WI_REID_DEVICE" not in os.environ:
+            value = _yaml_get(yaml_data, "reid", "device")
+            if value is not None:
+                self.reid_device = str(value)
+        if "WI_REID_MATCH_THRESHOLD" not in os.environ:
+            value = _yaml_get(yaml_data, "reid", "match_threshold")
+            if value is not None:
+                self.reid_match_threshold = float(value)
+        if "WI_REID_REVIEW_THRESHOLD" not in os.environ:
+            value = _yaml_get(yaml_data, "reid", "review_threshold")
+            if value is not None:
+                self.reid_review_threshold = float(value)
+        if "WI_REID_MIN_MARGIN" not in os.environ:
+            value = _yaml_get(yaml_data, "reid", "min_margin")
+            if value is not None:
+                self.reid_min_margin = float(value)
 
         if "WI_GNN_DEVICE" not in os.environ:
             value = _yaml_get(yaml_data, "gnn", "device")

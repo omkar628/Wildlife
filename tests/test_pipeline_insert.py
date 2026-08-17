@@ -45,6 +45,27 @@ def test_pipeline_inserts_detections_and_review_items(db, tmp_settings, tmp_path
     assert observation["tiger_id"] is None
 
 
+def test_detector_short_batch_marks_leftover_images_failed(db, tmp_settings, tmp_path):
+    folder = tmp_path / "C-short"
+    make_jpeg(folder / "one.jpg", (10, 20, 30))
+    make_jpeg(folder / "two.jpg", (200, 180, 20))
+    CameraRepository(db).upsert("C01")
+
+    class ShortDetector:
+        def predict_paths(self, image_paths):
+            return [[ParsedDetection(0, "tiger", 0.91, 8, 8, 30, 24)]]
+
+    jobs = JobRepository(db)
+    job_id = jobs.create(str(folder), "C01", tmp_settings.confidence_auto_accept)
+    _pipeline(db, tmp_settings, ShortDetector())._run_job(job_id, folder, "C01")
+    job = jobs.get(job_id)
+    assert job["status"] == "completed"
+    assert job["processed"] == 1
+    assert job["failed"] == 1
+    statuses = sorted(item["processing_status"] for item in ImageRepository(db).list_recent(10))
+    assert statuses == ["completed", "failed"]
+
+
 def test_corrupt_image_does_not_stop_pipeline(db, tmp_settings, tmp_path):
     folder = tmp_path / "C02"
     make_jpeg(folder / "good.jpg")

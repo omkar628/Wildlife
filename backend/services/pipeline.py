@@ -9,6 +9,7 @@ import logging
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 from backend.config import Settings
 from backend.database.connection import Database
@@ -34,10 +35,17 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineService:
-    def __init__(self, db: Database, settings: Settings, detector: DetectorService) -> None:
+    def __init__(
+        self,
+        db: Database,
+        settings: Settings,
+        detector: DetectorService,
+        identity: Any | None = None,
+    ) -> None:
         self.db = db
         self.settings = settings
         self.detector = detector
+        self.identity = identity
         self.jobs = JobRepository(db)
         self.images = ImageRepository(db)
         self.detections = DetectionRepository(db)
@@ -211,7 +219,10 @@ class PipelineService:
                 len(batch),
             )
 
-        for (image_id, path), detections in zip(batch, predictions):
+        paired = min(len(batch), len(predictions))
+        for index in range(paired):
+            image_id, path = batch[index]
+            detections = predictions[index]
             try:
                 self._store_detections(job_id, image_id, path, detections)
                 self.images.set_status(image_id, "completed")
@@ -221,6 +232,12 @@ class PipelineService:
                 self.images.set_status(image_id, "failed", str(exc))
                 self.errors.add(job_id, str(path), str(exc))
                 self.jobs.increment(job_id, failed=1)
+
+        for image_id, path in batch[paired:]:
+            message = "Detector returned fewer results than images in the batch."
+            self.images.set_status(image_id, "failed", message)
+            self.errors.add(job_id, str(path), f"detector: {message}")
+            self.jobs.increment(job_id, failed=1)
 
     def _store_detections(
         self,
@@ -295,7 +312,7 @@ class PipelineService:
                     padding=self.settings.crop_padding,
                     jpeg_quality=self.settings.crop_jpeg_quality,
                 )
-                self.observations.create(
+                observation_id = self.observations.create(
                     detection_id=detection_id,
                     tiger_id=None,
                     reid_confidence=None,
@@ -303,3 +320,16 @@ class PipelineService:
                     timestamp=timestamp,
                     human_verified=False,
                 )
+                self._identify_observation(observation_id)
+
+    def _identify_observation(self, observation_id: int) -> None:
+        """Best-effort Re-ID. Failures leave the observation unidentified."""
+        if self.identity is None or not getattr(self.settings, "reid_enabled", True):
+            return
+        try:
+            self.identity.identify_new_observation(observation_id)
+        except Exception:
+            logger.exception(
+                "Re-ID failed for observation %s; leaving unidentified",
+                observation_id,
+            )

@@ -160,6 +160,35 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON import_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_camera ON import_jobs(camera_id);
 
 CREATE INDEX IF NOT EXISTS idx_errors_job ON image_errors(job_id);
+
+CREATE TABLE IF NOT EXISTS tiger_embeddings (
+    embedding_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    observation_id INTEGER NOT NULL UNIQUE,
+    tiger_id TEXT,
+    vector BLOB NOT NULL,
+    dim INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (observation_id) REFERENCES tiger_observations(observation_id),
+    FOREIGN KEY (tiger_id) REFERENCES tigers(tiger_id)
+);
+
+CREATE TABLE IF NOT EXISTS reid_suggestions (
+    observation_id INTEGER PRIMARY KEY,
+    matched INTEGER NOT NULL DEFAULT 0,
+    suggested_tiger_id TEXT,
+    similarity REAL,
+    needs_review INTEGER NOT NULL DEFAULT 1,
+    decision TEXT NOT NULL,
+    candidates TEXT NOT NULL,
+    reason TEXT,
+    deferred INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (observation_id) REFERENCES tiger_observations(observation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_emb_tiger ON tiger_embeddings(tiger_id);
+CREATE INDEX IF NOT EXISTS idx_reid_suggestions_decision ON reid_suggestions(decision);
 """
 
 

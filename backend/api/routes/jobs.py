@@ -92,10 +92,7 @@ def get_job(job_id: int, db: Database = Depends(db_dep)) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     errors = ErrorRepository(db).list_for_job(job_id)
-    elapsed = None
-    if job.get("started_at") and job.get("finished_at"):
-        elapsed = None
-    return {"job": job, "errors": errors, "elapsed_note": elapsed}
+    return {"job": job, "errors": errors, "elapsed_note": job.get("error_message")}
 
 
 @router.post("/jobs/{job_id}/cancel")

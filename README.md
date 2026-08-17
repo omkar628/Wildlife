@@ -2,10 +2,11 @@
 
 Offline desktop workflow for camera-trap analysis.
 
-This milestone takes a folder of images, runs the local YOLO11n detector
+This app takes a folder of images, runs the local YOLO11n detector
 (`best.pt`), stores results in SQLite, and shows them in a React dashboard.
-Tiger Re-ID and the GNN are wired as future plug-in points. They are **not**
-implemented yet.
+Local tiger identity uses MegaDescriptor-S-224 (T001+ IDs). Next-station
+ranking uses the shipped GNN V3.1 weights. The ATRW ArcFace/FAISS gallery
+is inspected only and is never assigned to field tigers.
 
 ```
 SD card / camera folder
@@ -18,7 +19,9 @@ confidence filter
         ↓
 SQLite + tiger crops
         ↓
-dashboard / human review
+MegaDescriptor local Re-ID (T001+)
+        ↓
+dashboard / human review / GNN next-station
 ```
 
 ## A. What was already in this folder
@@ -49,28 +52,15 @@ Do not delete, overwrite, convert, or recommit these.
 
 ## C. Tiger Re-ID status
 
-The weights, FAISS index, and metadata are present. **The inference code is
-not.** This repo does not contain the model class, preprocessing, embedding
-normalization, or match threshold used when those files were trained.
+**Production identity is local MegaDescriptor + T001+ IDs.** First IDs are
+created by a reviewer. Later high-confidence matches (default cosine ≥ 0.90)
+can auto-assign only after the YOLO class is accepted or confirmed as tiger.
+ATRW numeric gallery IDs such as `"250"` are rejected.
 
-Observed from the files (not sufficient to run identity):
-
-- Checkpoint is a raw `state_dict`, not a full training script.
-- Final layers: `bottleneck` 768→512, `bn` 512, `arcface.weight` shape `(107, 512)`.
-- FAISS magic `IxFI` = inner-product index, 512-d, 1887 rows (matches the pickle).
-- Gallery IDs are numeric strings such as `"250"`, not field IDs like `T017`.
-- Pickle image paths point at a Kaggle dataset that is not on this machine.
-
-Missing before Re-ID can be turned on:
-
-1. The Python class whose `forward` returns the 512-d embedding.
-2. Exact crop size, resize, color order, and normalization.
-3. Whether embeddings are L2-normalized before FAISS.
-4. The score threshold / top-k rule used to assign an ID.
-5. Mapping from gallery IDs to field IDs (`T017`).
-
-`backend/reid/` is the adapter. It reports this status and returns
-`tiger_id = None` until the original inference code is provided.
+The shipped ATRW files (`tiger_reid_arcface.pth`, `tiger_vector_index.faiss`,
+`tiger_metadata.pkl`) remain in the repo for inspection. They are **not**
+used to assign field IDs. MegaDescriptor is loaded from
+`BVRA/MegaDescriptor-S-224` (Hugging Face cache after the first download).
 
 ## Prerequisites
 
@@ -164,7 +154,7 @@ The UI stays responsive. Progress is on the **Processing** page.
 
 Rules:
 
-- Recursive scan of `.jpg` / `.jpeg` / `.png`
+- Recursive scan of `.jpg` / `.jpeg` / `.png` / `.webp`
 - Original images are never deleted or modified
 - Duplicate files are skipped by SHA-256 of file bytes
 - A stopped job can be started again; completed hashes are not reprocessed
@@ -176,7 +166,7 @@ Rules:
 | --- | --- |
 | YOLO weights | `best.pt` (or `models/detector/best.pt`) |
 | Re-ID assets | project root (or `models/reid/`) |
-| Future GNN | `models/gnn/` (empty on purpose) |
+| GNN V3.1 weights | `gnn_model_v3_optimized_best.pt` (or `models/gnn/`) |
 | SQLite database | `database/wildlife.db` |
 | Tiger crops | `data/crops/image_<id>/detection_<id>.jpg` |
 | Logs | `logs/app.log` |
@@ -246,9 +236,9 @@ WildlifeIntelligence/
 │   ├── detector/                   YOLO service + parser
 │   ├── ingestion/                  scan, hash, EXIF
 │   ├── review/
-│   ├── reid/                       adapter only
-│   ├── graph/                      camera / observation graphs, no GNN
-│   └── services/                   pipeline, crops, confidence
+│   ├── reid/                       MegaDescriptor + local T001+ identity
+│   ├── graph/                      camera / observation graphs
+│   └── services/                   pipeline, crops, confidence, GNN V3.1
 ├── electron/                       Desktop shell + native folder picker
 ├── frontend/                       React + Vite
 ├── config/settings.yaml
@@ -259,11 +249,14 @@ WildlifeIntelligence/
 └── main.py
 ```
 
-## Future plug-ins (not in this milestone)
+## Identity and GNN
 
-- Re-ID: implement `TigerReIDBackend` in `backend/reid/` using the original training code.
-- GNN: add `models/gnn/` and consume `GET /api/graph`. Do not change YOLO, SQLite, or ingestion.
-- Frontend already treats graph data as events (`tiger_id`, `camera_id`, `timestamp`, `confidence`) so animation can be added later without touching inference.
+- Re-ID: MegaDescriptor-S-224 embeds tiger crops into a local gallery. Humans
+  create T001, T002, … IDs. Auto-assign only happens above
+  `reid.match_threshold` and only for accepted tiger detections.
+- GNN: `GET /api/graph` and `GET /api/graph/tigers/{id}/route` rank the next
+  camera from identified history. Need 5 identified observations and cameras
+  with latitude/longitude. Do not change YOLO, SQLite, or GNN architecture.
 
 ## Troubleshooting
 
@@ -291,8 +284,9 @@ That is expected on CPU. Lower `detector.batch_size` in `config/settings.yaml` i
 **Same photos imported twice**
 If the pixels are identical, SHA-256 will mark them as duplicates even when the filename or folder changed.
 
-**Re-ID does nothing**
-Expected. See “Tiger Re-ID status” above.
+**Re-ID stays on human confirm**
+If MegaDescriptor is disabled (`WI_REID_ENABLED=false`) or failed to load,
+identity is human-only. Check `/api/health` → `reid.loaded`.
 
 **Port 8000 or 5173 already in use**
 Stop the other process, or change `WI_PORT` / the Vite `server.port`.
@@ -302,5 +296,3 @@ Stop the other process, or change `WI_PORT` / the Vite `server.port`.
 `.gitignore` excludes virtualenvs, `node_modules`, model weights (`*.pt`,
 `*.pth`, `*.faiss`, `*.pkl`), SQLite files, and generated `data/` / `logs/`.
 Do not commit the trained assets to a normal Git remote.
-#   W i l d l i f e  
- 

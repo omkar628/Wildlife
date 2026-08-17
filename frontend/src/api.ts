@@ -42,8 +42,8 @@ export const api = {
     request(`/reviews/${id}/decide`, { method: 'POST', body: JSON.stringify({ human_class }) }),
   unidentifiedObservations: () =>
     request<UnidentifiedPayload>('/observations/unidentified'),
-  assignIdentity: (observationId: number, payload: { action: 'assign' | 'create'; tiger_id?: string }) =>
-    request<{ tiger_id: string; created: boolean }>(
+  assignIdentity: (observationId: number, payload: { action: 'assign' | 'create' | 'keep'; tiger_id?: string }) =>
+    request<{ tiger_id: string | null; created: boolean; kept_unidentified?: boolean }>(
       `/observations/${observationId}/identity`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),
@@ -55,6 +55,8 @@ export const api = {
   graph: () => request<GraphPayload>('/graph'),
   gnnPrediction: (tigerId: string) =>
     request<GnnPrediction>(`/graph/predictions?tiger_id=${encodeURIComponent(tigerId)}`),
+  tigerRoute: (tigerId: string) =>
+    request<TigerRoute>(`/graph/tigers/${encodeURIComponent(tigerId)}/route`),
 }
 
 export function imageUrl(imageId: number): string {
@@ -69,7 +71,21 @@ export type Health = {
   status: string
   offline: boolean
   detector: { available: boolean; path: string; device: string }
-  reid: { implemented: boolean; reason: string }
+  reid: {
+    implemented?: boolean
+    loaded?: boolean
+    device?: string
+    backend?: string
+    reason?: string | null
+    uses_atrw_gallery?: boolean
+    match_threshold?: number
+    review_threshold?: number
+    local_identity?: {
+      encoder_enabled?: boolean
+      assigns_atrw_ids?: boolean
+      id_namespace?: string
+    }
+  }
   gnn: GnnStatus
   confidence: { auto_accept: number; detect_min: number }
 }
@@ -216,6 +232,25 @@ export type TigerCatalogItem = TigerRow & {
   references: IdentityReference[]
 }
 
+export type ReidCandidate = {
+  tiger_id: string
+  similarity: number
+  support?: number
+  mean_similarity?: number
+}
+
+export type ReidSuggestion = {
+  matched: boolean
+  tiger_id: string | null
+  suggested_tiger_id: string | null
+  similarity: number | null
+  needs_review: boolean
+  decision: string | null
+  candidates: ReidCandidate[]
+  reason: string | null
+  deferred?: boolean
+}
+
 export type UnidentifiedObservation = {
   observation_id: number
   detection_id: number
@@ -225,6 +260,7 @@ export type UnidentifiedObservation = {
   timestamp: string | null
   image_timestamp: string | null
   crop_path: string | null
+  reid?: ReidSuggestion | null
 }
 
 export type UnidentifiedPayload = {
@@ -251,6 +287,100 @@ export type CameraRow = {
   latitude: number | null
   longitude: number | null
   habitat: string | null
+}
+
+export type OccupancyMode = 'all_species' | 'tiger' | 'selected_tiger'
+
+export type OccupancyStation = {
+  camera_id: string
+  latitude: number | null
+  longitude: number | null
+  registered: boolean
+  missing_coordinates: boolean
+  zone_type: string | null
+  habitat: string | null
+  all_species_detections: number
+  tiger_captures: number
+  unique_tigers: number
+  selected_tiger_captures: number
+  latest_tiger_id: string | null
+  latest_tiger_timestamp: string | null
+  occupancy_level_all_species: string
+  occupancy_level_tiger: string
+  occupancy_level_selected_tiger: string
+  capture_frequency_per_day: number | null
+  capture_span_days: number | null
+}
+
+export type OccupancyPayload = {
+  stations: OccupancyStation[]
+  supported_modes: OccupancyMode[]
+  selected_tiger_id?: string | null
+}
+
+export type ObservedStop = {
+  camera_id: string
+  timestamp: string | null
+  latitude: number | null
+  longitude: number | null
+  confidence: number | null
+  observation_id: number
+  tiger_id: string
+  missing_coordinates: boolean
+  registered: boolean
+  zone_type: string | null
+  habitat: string | null
+}
+
+export type RankedCandidate = {
+  rank: number
+  camera_id: string
+  score: number | null
+  confidence: number | null
+  latitude: number | null
+  longitude: number | null
+  registered: boolean
+  missing_coordinates: boolean
+  zone_type: string | null
+}
+
+export type RoutePredictions = {
+  available: boolean
+  reason?: string
+  detail?: string
+  tiger_id?: string
+  predicted_camera_id?: string
+  confidence?: number
+  summary?: string
+  latitude?: number | null
+  longitude?: number | null
+  missing_coordinates?: boolean
+  ranked_candidates?: RankedCandidate[]
+  feature_degraded?: boolean
+  history?: Array<{ camera_id: string; timestamp: string | null; observation_id?: number }>
+  prediction_timestamp?: string
+}
+
+export type HomeRange = {
+  available: boolean
+  reason: string | null
+  label: string
+  polygon: Array<{ latitude: number; longitude: number; camera_id?: string }>
+  point_count: number
+  unique_stations: number
+}
+
+export type TigerRoute = {
+  tiger_id: string
+  observed_route: ObservedStop[]
+  current_station: ObservedStop | null
+  predictions: RoutePredictions
+  occupancy: OccupancyPayload
+  home_range: HomeRange
+  visited_stations: string[]
+  observation_count: number
+  last_observed_station: string | null
+  last_observed_timestamp: string | null
 }
 
 export type GnnStatus = {
@@ -288,7 +418,14 @@ export type GnnPrediction = {
 
 export type GraphPayload = {
   camera_graph: {
-    nodes: Array<{ camera_id: string; observation_count: number; image_count: number }>
+    nodes: Array<{
+      camera_id: string
+      latitude?: number | null
+      longitude?: number | null
+      habitat?: string | null
+      observation_count: number
+      image_count: number
+    }>
     edges: Array<{ source: string; target: string; tiger_id: string | null; weight: number }>
   }
   observation_graph: {
@@ -299,5 +436,6 @@ export type GraphPayload = {
       confidence: number | null
     }>
   }
+  occupancy?: OccupancyPayload
   gnn: GnnStatus
 }

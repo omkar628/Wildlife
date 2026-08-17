@@ -108,7 +108,7 @@ def test_rejects_atrw_numeric_ids(tmp_settings, db):
     assert ObservationRepository(db).get(obs_id)["tiger_id"] is None
 
 
-def test_encoder_stays_disabled(tmp_settings, db):
+def test_encoder_stays_disabled_without_backend(tmp_settings, db):
     gallery = LocalIdentityService(db).gallery
     assert gallery.encoder_enabled() is False
     result = gallery.identify_crop(tmp_settings.project_root / "missing.jpg")
@@ -170,6 +170,6 @@ def test_identity_api_create_and_list(tmp_settings, db):
     assert tiger["history"][0]["camera_id"] == "C07"
 
     health = client.get("/api/health").json()
-    assert health["reid"]["implemented"] is False
-    assert health["reid"]["local_identity"]["encoder_enabled"] is False
+    assert health["reid"]["uses_atrw_gallery"] is False
     assert health["reid"]["local_identity"]["assigns_atrw_ids"] is False
+    assert health["reid"]["local_identity"]["id_namespace"] == "T001+"

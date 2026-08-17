@@ -85,7 +85,9 @@ export default function JobsPage() {
                   <tr><td>Tiger / prey / rival / human</td><td>{job.tiger_count} / {job.prey_count} / {job.rival_count} / {job.human_count}</td></tr>
                   <tr><td>Low confidence / review</td><td>{job.low_confidence_count} / {job.review_count}</td></tr>
                   <tr><td>Threshold</td><td>{job.confidence_threshold}</td></tr>
-                  <tr><td>Timing</td><td>{job.error_message ?? '—'}</td></tr>
+                  <tr><td>Started</td><td>{job.started_at ?? '—'}</td></tr>
+                  <tr><td>Finished</td><td>{job.finished_at ?? '—'}</td></tr>
+                  {job.error_message ? <tr><td>Note</td><td>{job.error_message}</td></tr> : null}
                 </tbody>
               </table>
               {detail && detail.errors.length > 0 && (

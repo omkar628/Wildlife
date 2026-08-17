@@ -56,7 +56,7 @@ export default function TigersPage() {
       <div className="page-head">
         <div>
           <h2>Tigers</h2>
-          <p>Human-confirmed field IDs (T001…). Encoder matching is off. ATRW gallery IDs are never used.</p>
+          <p>Local field IDs (T001…). MegaDescriptor can auto-assign high-confidence matches. ATRW gallery IDs are never used.</p>
         </div>
       </div>
       <div className="grid two">

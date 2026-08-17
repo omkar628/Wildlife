@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -421,6 +422,7 @@ class ObservationRepository:
         row = self.db.fetchone(
             """
             SELECT o.*, d.confidence, d.class_name, d.final_class_name,
+                   d.accepted, d.review_status,
                    d.image_id, d.bbox_x, d.bbox_y, d.bbox_width, d.bbox_height,
                    i.camera_id, i.original_path, i.filename,
                    i.timestamp AS image_timestamp,
@@ -446,7 +448,12 @@ class ObservationRepository:
             JOIN detections d ON d.detection_id = o.detection_id
             JOIN images i ON i.image_id = d.image_id
             WHERE o.tiger_id IS NULL
-            ORDER BY o.observation_id
+              AND d.accepted = 1
+              AND LOWER(COALESCE(d.final_class_name, d.class_name)) = 'tiger'
+            ORDER BY COALESCE(
+                (SELECT s.deferred FROM reid_suggestions s WHERE s.observation_id = o.observation_id),
+                0
+            ), o.observation_id
             LIMIT ?
             """,
             (limit,),
@@ -455,7 +462,14 @@ class ObservationRepository:
 
     def unidentified_count(self) -> int:
         row = self.db.fetchone(
-            "SELECT COUNT(*) AS n FROM tiger_observations WHERE tiger_id IS NULL"
+            """
+            SELECT COUNT(*) AS n
+            FROM tiger_observations o
+            JOIN detections d ON d.detection_id = o.detection_id
+            WHERE o.tiger_id IS NULL
+              AND d.accepted = 1
+              AND LOWER(COALESCE(d.final_class_name, d.class_name)) = 'tiger'
+            """
         )
         return int(row["n"]) if row else 0
 
@@ -499,6 +513,21 @@ class ObservationRepository:
         )
         return [row_to_dict(row) for row in rows]
 
+    def list_identified(self) -> list[dict[str, Any]]:
+        rows = self.db.fetchall(
+            """
+            SELECT o.*, d.confidence, d.class_name, d.final_class_name,
+                   i.camera_id, i.original_path, i.filename,
+                   i.timestamp AS image_timestamp
+            FROM tiger_observations o
+            JOIN detections d ON d.detection_id = o.detection_id
+            JOIN images i ON i.image_id = d.image_id
+            WHERE o.tiger_id IS NOT NULL
+            ORDER BY COALESCE(o.timestamp, i.timestamp, o.created_at)
+            """
+        )
+        return [row_to_dict(row) for row in rows]
+
     def list_for_tiger(self, tiger_id: str) -> list[dict[str, Any]]:
         rows = self.db.fetchall(
             """
@@ -513,6 +542,26 @@ class ObservationRepository:
             (tiger_id,),
         )
         return [row_to_dict(row) for row in rows]
+
+    def delete_for_detection(self, detection_id: int) -> bool:
+        """Remove the observation and its Re-ID rows. Crop files stay on disk."""
+        existing = self.get_by_detection(detection_id)
+        if existing is None:
+            return False
+        observation_id = int(existing["observation_id"])
+        self.db.execute(
+            "DELETE FROM reid_suggestions WHERE observation_id = ?",
+            (observation_id,),
+        )
+        self.db.execute(
+            "DELETE FROM tiger_embeddings WHERE observation_id = ?",
+            (observation_id,),
+        )
+        self.db.execute(
+            "DELETE FROM tiger_observations WHERE observation_id = ?",
+            (observation_id,),
+        )
+        return True
 
 
 class TigerRepository:
@@ -579,6 +628,150 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """,
             (key, value, utc_now()),
+        )
+
+
+class EmbeddingRepository:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def upsert(
+        self,
+        observation_id: int,
+        vector: bytes,
+        dim: int,
+        model: str,
+        tiger_id: str | None = None,
+    ) -> int:
+        existing = self.get_by_observation(observation_id)
+        if existing is None:
+            return self.db.execute_returning_id(
+                """
+                INSERT INTO tiger_embeddings(
+                    observation_id, tiger_id, vector, dim, model, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (observation_id, tiger_id, vector, dim, model, utc_now()),
+            )
+        self.db.execute(
+            """
+            UPDATE tiger_embeddings
+            SET tiger_id = COALESCE(?, tiger_id)
+            WHERE observation_id = ?
+            """,
+            (tiger_id, observation_id),
+        )
+        return int(existing["embedding_id"])
+
+    def set_tiger_id(self, observation_id: int, tiger_id: str | None) -> None:
+        self.db.execute(
+            "UPDATE tiger_embeddings SET tiger_id = ? WHERE observation_id = ?",
+            (tiger_id, observation_id),
+        )
+
+    def get_by_observation(self, observation_id: int) -> dict[str, Any] | None:
+        row = self.db.fetchone(
+            "SELECT * FROM tiger_embeddings WHERE observation_id = ?",
+            (observation_id,),
+        )
+        return row_to_dict(row) if row else None
+
+    def list_for_tiger(self, tiger_id: str) -> list[dict[str, Any]]:
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM tiger_embeddings
+            WHERE tiger_id = ?
+            ORDER BY embedding_id
+            """,
+            (tiger_id,),
+        )
+        return [row_to_dict(row) for row in rows]
+
+    def list_identified(self) -> list[dict[str, Any]]:
+        rows = self.db.fetchall(
+            """
+            SELECT * FROM tiger_embeddings
+            WHERE tiger_id IS NOT NULL
+            ORDER BY embedding_id
+            """
+        )
+        return [row_to_dict(row) for row in rows]
+
+    def count_for_tiger(self, tiger_id: str) -> int:
+        row = self.db.fetchone(
+            "SELECT COUNT(*) AS n FROM tiger_embeddings WHERE tiger_id = ?",
+            (tiger_id,),
+        )
+        return int(row["n"]) if row else 0
+
+
+class SuggestionRepository:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def upsert(self, observation_id: int, payload: dict[str, Any]) -> None:
+        existing = self.get(observation_id)
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, str):
+            candidates = json.dumps(candidates or [])
+        values = (
+            1 if payload.get("matched") else 0,
+            payload.get("suggested_tiger_id"),
+            payload.get("similarity"),
+            1 if payload.get("needs_review", True) else 0,
+            payload.get("decision") or "unknown",
+            candidates,
+            payload.get("reason"),
+            1 if payload.get("deferred") else 0,
+            utc_now(),
+            observation_id,
+        )
+        if existing is None:
+            self.db.execute(
+                """
+                INSERT INTO reid_suggestions(
+                    matched, suggested_tiger_id, similarity, needs_review,
+                    decision, candidates, reason, deferred, created_at, observation_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            return
+        self.db.execute(
+            """
+            UPDATE reid_suggestions
+            SET matched = ?, suggested_tiger_id = ?, similarity = ?, needs_review = ?,
+                decision = ?, candidates = ?, reason = ?, deferred = ?, created_at = ?
+            WHERE observation_id = ?
+            """,
+            values,
+        )
+
+    def get(self, observation_id: int) -> dict[str, Any] | None:
+        row = self.db.fetchone(
+            "SELECT * FROM reid_suggestions WHERE observation_id = ?",
+            (observation_id,),
+        )
+        return row_to_dict(row) if row else None
+
+    def mark_deferred(self, observation_id: int) -> None:
+        existing = self.get(observation_id)
+        if existing is None:
+            self.upsert(
+                observation_id,
+                {
+                    "matched": False,
+                    "needs_review": True,
+                    "decision": "unknown",
+                    "candidates": [],
+                    "reason": "Kept unidentified by a reviewer.",
+                    "deferred": True,
+                },
+            )
+            return
+        self.db.execute(
+            "UPDATE reid_suggestions SET deferred = 1 WHERE observation_id = ?",
+            (observation_id,),
         )
 
 

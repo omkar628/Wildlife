@@ -78,8 +78,8 @@ export default function App() {
             Detector {health?.detector.available ? 'ready' : 'weights missing'}
           </div>
           <div style={{ marginTop: 8 }}>
-            <span className="dot warn" />
-            Identity: human confirm
+            <span className={`dot ${health?.reid?.loaded ? 'ok' : 'warn'}`} />
+            Identity {health?.reid?.loaded ? `MegaDescriptor ${health.reid.device ?? ''}` : 'human confirm'}
           </div>
           <div style={{ marginTop: 8 }}>
             <span className={`dot ${health?.gnn?.loaded ? 'ok' : 'warn'}`} />

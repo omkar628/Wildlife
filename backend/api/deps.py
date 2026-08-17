@@ -10,6 +10,7 @@ from backend.detector.service import DetectorService
 from backend.graph.builder import GraphService
 from backend.reid.adapter import UnavailableReIDAdapter
 from backend.reid.identity import LocalIdentityService
+from backend.reid.megadescriptor import MegaDescriptorEncoder
 from backend.review.service import ReviewService
 from backend.services.gnn_service import GNNService
 from backend.services.pipeline import PipelineService
@@ -21,13 +22,23 @@ def get_detector() -> DetectorService:
 
 
 @lru_cache(maxsize=1)
+def get_reid_encoder() -> MegaDescriptorEncoder:
+    return MegaDescriptorEncoder(get_settings())
+
+
+@lru_cache(maxsize=1)
 def get_pipeline() -> PipelineService:
-    return PipelineService(get_database(), get_settings(), get_detector())
+    return PipelineService(
+        get_database(),
+        get_settings(),
+        get_detector(),
+        identity=get_identity_service(),
+    )
 
 
 @lru_cache(maxsize=1)
 def get_review_service() -> ReviewService:
-    return ReviewService(get_database(), get_settings())
+    return ReviewService(get_database(), get_settings(), identity=get_identity_service())
 
 
 @lru_cache(maxsize=1)
@@ -42,7 +53,9 @@ def get_reid_adapter() -> UnavailableReIDAdapter:
 
 @lru_cache(maxsize=1)
 def get_identity_service() -> LocalIdentityService:
-    return LocalIdentityService(get_database())
+    settings = get_settings()
+    encoder = get_reid_encoder() if settings.reid_enabled else None
+    return LocalIdentityService(get_database(), settings, encoder)
 
 
 @lru_cache(maxsize=1)
